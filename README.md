@@ -14,7 +14,7 @@ account management (save, switch, rename, marker-trusted resync) and the
 report fields this plugin renders. Install the fork binary first:
 
 ```bash
-cargo install --git https://github.com/leoom/ai-usagebar --branch whkey-options
+cargo install --git https://github.com/leonaffi-byte/ai-usagebar --branch whkey-options
 ```
 
 With the unmodified upstream `ai-usagebar` the plugin still shows usage, but
@@ -24,7 +24,7 @@ helper never appears.
 ## Install
 
 ```bash
-omarchy plugin add https://github.com/leoom/switchboard --enable
+omarchy plugin add https://github.com/leonaffi-byte/switchboard --enable
 ```
 
 ## Remove
