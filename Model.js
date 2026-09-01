@@ -343,12 +343,14 @@ function severityBand(percent) {
 }
 
 // This is the single severity-to-theme mapping used by both bar and panel.
+// The resting state is full foreground: low usage is GOOD news and must not
+// render dimmed ("muted" reads as disabled in the bar). Muted is reserved for
+// stale/absent data, which the callers dim separately.
 function severityColor(percent, palette, forceError) {
   var colors = palette || {}
   if (forceError === true || severityBand(percent) === "critical") return colors.urgent
   if (severityBand(percent) === "high") return colors.accent
-  if (severityBand(percent) === "mid") return colors.foreground
-  return colors.muted
+  return colors.foreground
 }
 
 function formatClock(value) {

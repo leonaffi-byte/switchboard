@@ -155,7 +155,7 @@ test('severity boundaries map to the five supported theme roles', () => {
     ['low', 'mid', 'mid', 'high', 'high', 'critical']);
   const palette = {muted: 'muted', foreground: 'foreground', accent: 'accent', urgent: 'urgent'};
   assert.deepEqual([49, 50, 75, 90].map(value => model.severityColor(value, palette, false)),
-    ['muted', 'foreground', 'accent', 'urgent']);
+    ['foreground', 'foreground', 'accent', 'urgent']);
   assert.equal(model.severityColor(2, palette, true), 'urgent');
   assert.equal(model.finitePercent(null), null);
   assert.equal(model.formatClock(0), '');
