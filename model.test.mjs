@@ -597,7 +597,8 @@ test('manifest and QML retain the required plugin lifecycle contracts', () => {
   assert.match(panel, /spacing:\s*Style\.spacing\.panelGap/);
   assert.match(panel, /interval:\s*60000/);
   assert.match(panel, /Model\.claudeMeterCaption\(claudeRow\.entry, root\.nowMs\)/);
-  assert.match(panel, /Model\.agentMeterCaption\(agentRow\.entry, root\.nowMs\)/);
+  assert.match(panel, /Model\.entryTooltip\(entry, root\.nowMs\)/);
+  assert.doesNotMatch(panel, /Model\.agentMeterCaption\(/);
   assert.match(panel, /Model\.familyGlyph\(/);
   assert.doesNotMatch(panel, /Model\.resetClock\(/);
   assert.doesNotMatch(panel, /Color\.(?:warning|critical|error)/);
