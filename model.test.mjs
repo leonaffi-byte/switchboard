@@ -418,3 +418,46 @@ test('manifest and QML retain the required plugin lifecycle contracts', () => {
   assert.doesNotMatch(panel, /Color\.(?:warning|critical|error)/);
   assert.doesNotMatch(panel, /\bIpcHandler\s*\{/);
 });
+
+test('alert state follows the account across a slot move, not the entry id', () => {
+  // "work" is live: alerts fire on the default slot under its account identity.
+  const live = claude('anthropic', true, 91, {account_label: 'work'});
+  const first = model.alertDecisions([live], {}, {enabled: true});
+  assert.equal(first.notifications.length, 2);
+
+  // After switching away, the same account reappears as anthropic@work at the
+  // same usage — no re-alert, the armed state moved with the account.
+  const parked = claude('anthropic@work', false, 91);
+  const after = model.alertDecisions([parked], first.armedState, {enabled: true});
+  assert.equal(after.notifications.length, 0);
+
+  // A different account at the same usage still alerts.
+  const other = claude('anthropic@home', false, 91);
+  const fresh = model.alertDecisions([parked, other], after.armedState, {enabled: true});
+  assert.deepEqual(Array.from(fresh.notifications, command => command[3]),
+    ['home 5h at 91%', 'home 5h at 91%']);
+
+  // Re-arm also follows the account: work resets below Warn, then re-crosses.
+  const dropped = model.alertDecisions([claude('anthropic@work', false, 10)],
+    fresh.armedState, {enabled: true});
+  const recrossed = model.alertDecisions([claude('anthropic', true, 91, {account_label: 'work'})],
+    dropped.armedState, {enabled: true});
+  assert.equal(recrossed.notifications.length, 2);
+});
+
+test('service contracts: cooldown base on every failed switch, no dead consumed flag, busy IPC', () => {
+  const service = fs.readFileSync(new URL('./Service.qml', import.meta.url), 'utf8');
+  // Both finishSwitch arms set the cooldown base (success + failure).
+  const finishSwitch = service.slice(service.indexOf('function finishSwitch'),
+    service.indexOf('function finishSave'));
+  assert.equal((finishSwitch.match(/lastSwitchMs = Date\.now\(\)/g) || []).length, 2);
+  // The failure-arm assignment is unconditional (before the wasAuto guard).
+  assert.match(finishSwitch, /lastSwitchMs = Date\.now\(\)\s*\n\s*if \(wasAuto\)/);
+  assert.doesNotMatch(service, /reportConsumed/);
+  // IPC refresh/toggleAccount refuse with "busy" instead of queueing.
+  assert.equal((service.match(/return "busy"/g) || []).length, 2);
+  // Parse decides success; the exit code is consulted only afterwards (C4).
+  const finishRefresh = service.slice(service.indexOf('function finishRefresh'),
+    service.indexOf('function finishSwitch'));
+  assert.ok(finishRefresh.indexOf('Model.parseReport') < finishRefresh.indexOf('=== 127'));
+});

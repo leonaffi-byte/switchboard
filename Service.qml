@@ -28,7 +28,6 @@ Item {
   property var entries: []
   property double lastRefreshMs: 0
   property double lastSwitchMs: 0
-  property bool reportConsumed: true
   property bool binaryMissing: false
   property string statusError: ""
   property string lastAutoReason: "off"
@@ -187,8 +186,8 @@ Item {
       lastRefreshMs = Date.now()
       binaryMissing = false
 
-      // Exactly one synchronous evaluation consumes each successful parse.
-      reportConsumed = false
+      // Exactly one synchronous evaluation consumes each successful parse —
+      // this handler is the only evaluation site, so that holds by structure.
       var decision = Model.autoSwitchDecision(parsed.entries, {
         enabled: autoSwitch,
         threshold: autoThreshold,
@@ -197,7 +196,6 @@ Item {
         cooldownMs: 600000,
         marginPts: 10
       })
-      reportConsumed = true
       lastAutoReason = decision.action === "none" ? decision.reason : "switch"
       if (decision.action === "switch") startAccountSwitch(decision.label, true, decision)
 
@@ -308,7 +306,6 @@ Item {
 
     if (Number(exitCode) === 0) {
       lastSwitchMs = Date.now()
-      reportConsumed = true
       refreshQueued = true
       if (wasAuto && context) {
         autoEvent = {
@@ -325,9 +322,11 @@ Item {
 
     var message = failureMessage(exitCode, switchStderr, "account switch failed")
     statusError = message
+    // Every failed switch — manual, IPC, or auto — shares the cooldown base,
+    // so a refresh queued behind it cannot immediately auto-switch against a
+    // target the binary just refused.
+    lastSwitchMs = Date.now()
     if (wasAuto) {
-      // A guard refusal shares the cooldown base so it cannot be hammered.
-      lastSwitchMs = Date.now()
       autoEvent = { kind: "failed", message: message, atMs: lastSwitchMs }
     }
   }

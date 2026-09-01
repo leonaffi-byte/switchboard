@@ -542,12 +542,12 @@ function alertDecisions(entries, armedState, opts) {
     var metricLabel = autoTextSafe(metric.label, 160).trim() || "usage"
     var windowLabel = isClaudeEntry(entry) && /5h/i.test(metricLabel)
       ? "5h" : shortMetricLabel(metricLabel) || "usage"
-    var entryId = cleanText(entry.id, 180).trim()
+    var identity = alertIdentity(entry)
     var entryName = isClaudeEntry(entry) ? claudeEntryName(entry) : agentEntryName(entry)
 
     for (var j = 0; j < levels.length; j++) {
       var level = levels[j]
-      stateKey = entryId + "\u001f" + metricLabel + "\u001f" + level.name
+      stateKey = identity + "\u001f" + metricLabel + "\u001f" + level.name
       var armed = sourceState[stateKey] !== false
       if (percent < level.threshold) {
         nextState[stateKey] = true
@@ -563,6 +563,19 @@ function alertDecisions(entries, armedState, opts) {
   }
 
   return { notifications: notifications, armedState: nextState }
+}
+
+// Alert one-shot state must follow the ACCOUNT, not the report slot: the live
+// Claude login is always id "anthropic" and the same account reappears as
+// "anthropic@<label>" after a switch — keying by id would re-alert usage that
+// already notified, and a switch would falsely re-arm the live slot.
+function alertIdentity(entry) {
+  if (!isClaudeEntry(entry)) return cleanText(entry.id, 180).trim()
+  var id = String(entry.id || "")
+  if (id.indexOf("anthropic@") === 0)
+    return "claude\u001f" + id.slice("anthropic@".length)
+  var label = cleanText(entry.account_label, 64).trim()
+  return "claude\u001f" + (label !== "" ? label : "default")
 }
 
 function autoSwitchDecision(entries, opts) {
