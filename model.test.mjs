@@ -657,3 +657,18 @@ test('service contracts: cooldown base on every failed switch, no dead consumed 
     service.indexOf('function finishSwitch'));
   assert.ok(finishRefresh.indexOf('Model.parseReport') < finishRefresh.indexOf('=== 127'));
 });
+
+test('settings page contracts stay pinned in QML', () => {
+  const panel = fs.readFileSync(new URL('./Panel.qml', import.meta.url), 'utf8');
+  // Esc must work from any focus state on the settings page: a window-scoped
+  // shortcut guarded by settingsOpen, closing settings rather than the panel.
+  assert.match(panel, /Shortcut\s*\{[^}]*sequences:\s*\["Escape"\][^}]*enabled:\s*root\.opened && root\.settingsOpen[^}]*onActivated:\s*root\.closeSettings\(\)/s);
+  // Blank key input means "unchanged", driven by user edits only — a
+  // programmatic text reset must not flip the pending action.
+  assert.match(panel, /onTextEdited/);
+  assert.doesNotMatch(panel, /onTextChanged:[^\n]*pendingAction/);
+  // Clear is only offered when an inline key actually exists.
+  assert.match(panel, /inline_configured\s*===\s*true/);
+  // Leaving the panel always lands back on the main page with drafts dropped.
+  assert.match(panel, /scrubProviderDrafts\(\)\s*\n\s*settingsOpen = false/);
+});

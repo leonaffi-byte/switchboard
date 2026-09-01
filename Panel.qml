@@ -149,6 +149,17 @@ Panel {
     contentWidth: panel.fittedContentWidth(Style.space(300))
     contentHeight: panel.fittedContentHeight(column.implicitHeight, Style.space(460))
 
+    // A blocked PanelKeyCatcher swallows Escape without emitting
+    // closeRequested, so the settings page needs its own window-scoped
+    // shortcut — it works no matter which control holds focus, including
+    // mid-edit in a key field (pending input is deliberately dropped).
+    Shortcut {
+      sequences: ["Escape"]
+      context: Qt.WindowShortcut
+      enabled: root.opened && root.settingsOpen
+      onActivated: root.closeSettings()
+    }
+
     PanelKeyCatcher {
       id: keyCatcher
       anchors.fill: parent
