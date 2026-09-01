@@ -137,7 +137,7 @@ BarWidget {
     fontSize: Style.font.caption
     dimmed: root.svc ? root.svc.anyStale : false
     tooltipText: root.svc
-      ? Model.barTooltip(root.svc.entries, root.svc.barShows) : "Switchboard"
+      ? Model.barTooltip(root.svc.presentableEntries, root.svc.barShows) : "Switchboard"
 
     onPressed: function(buttonCode) {
       if (buttonCode === Qt.MiddleButton) {

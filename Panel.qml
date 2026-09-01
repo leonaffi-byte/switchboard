@@ -902,7 +902,6 @@ Panel {
     readonly property var metrics: Model.agentMetrics(entry)
     readonly property string health: Model.firstHealthText(entry)
     readonly property bool failed: entry.status === "error" || String(entry.error || "") !== ""
-    readonly property bool needsKey: Model.agentNeedsKey(entry)
     readonly property int primaryPercent: metrics.primary ? Number(metrics.primary.percent) : 0
     readonly property string detailText: failed
       ? Model.autoTextSafe(entry.error || "error", 300)
@@ -957,25 +956,10 @@ Panel {
 
         Item {
           id: agentRight
-          width: agentRow.needsKey ? needsKeyButton.implicitWidth : Style.space(92)
+          width: Style.space(92)
           height: parent.height
 
-          Button {
-            id: needsKeyButton
-            visible: agentRow.needsKey
-            anchors.right: parent.right
-            anchors.verticalCenter: parent.verticalCenter
-            text: "needs key →"
-            tooltipText: agentRow.detailText
-            foreground: Color.accent
-            fontSize: Style.font.caption
-            horizontalPadding: Style.spacing.sm
-            verticalPadding: Style.spacing.labelGap
-            onClicked: root.openSettings()
-          }
-
           Text {
-            visible: !agentRow.needsKey
             anchors.fill: parent
             verticalAlignment: Text.AlignVCenter
             horizontalAlignment: Text.AlignRight
@@ -993,7 +977,6 @@ Panel {
       }
 
       PrimaryMeter {
-        visible: !agentRow.needsKey
         width: parent.width
         metric: agentRow.metrics.primary
         failed: agentRow.failed

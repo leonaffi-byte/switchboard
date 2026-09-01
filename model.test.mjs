@@ -681,3 +681,14 @@ test('renameLabel resolves only concrete valid flat labels', () => {
   assert.equal(model.renameLabel({id: 'openai'}), null);
   assert.equal(model.renameLabel(null), null);
 });
+
+test('providers without a key are hidden from rows, bar, tooltip, and status', () => {
+  const keyless = {id: 'zai', display_name: 'Z.AI', short_name: 'zai', status: 'error', error: 'no API key', sections: []};
+  const live = {id: 'openai', display_name: 'Codex', short_name: 'gpt', status: 'ready', error: '', sections: [metric('Codex weekly', 45)]};
+  const shown = model.presentableEntries([keyless, live, claude('anthropic', true, 51)]);
+  assert.deepEqual(Array.from(shown, row => row.id), ['openai', 'anthropic']);
+  assert.deepEqual(Array.from(model.groupEntries(shown).agents, row => row.id), ['openai']);
+  assert.ok(!model.buildBarSegments(shown, 'all').some(segment => segment.family === 'zai'));
+  assert.doesNotMatch(model.statusLine(shown), /zai/);
+  assert.doesNotMatch(model.barTooltip(shown, 'claude'), /zai/);
+});

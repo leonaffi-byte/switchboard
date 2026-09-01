@@ -72,11 +72,12 @@ Item {
 
   signal settingsSaved()
 
-  readonly property var groupedEntries: Model.groupEntries(entries)
+  readonly property var presentableEntries: Model.presentableEntries(entries)
+  readonly property var groupedEntries: Model.groupEntries(presentableEntries)
   readonly property var claudeEntries: groupedEntries.claude
   readonly property var agentEntries: groupedEntries.agents
   readonly property var unsavedEntry: Model.unsavedLoginEntry(entries)
-  readonly property var barSegments: Model.buildBarSegments(entries, barShows)
+  readonly property var barSegments: Model.buildBarSegments(presentableEntries, barShows)
   readonly property bool hasReport: lastRefreshMs > 0
   readonly property bool refreshing: usageProcess.running
   readonly property bool settingsLoading: settingsLoadQueued || settingsShowProcess.running
@@ -613,7 +614,7 @@ Item {
       return root.toggleAccount() ? "ok" : "unavailable"
     }
 
-    function status(): string { return Model.statusLine(root.entries) }
+    function status(): string { return Model.statusLine(root.presentableEntries) }
 
     // Opens the panel directly on the settings page (also used by review
     // tooling — the page is otherwise reachable only by clicking the gear).

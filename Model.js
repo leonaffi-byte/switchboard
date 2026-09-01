@@ -272,6 +272,17 @@ function agentNeedsKey(entry) {
   return failed && agentMetrics(entry).primary === null
 }
 
+// Providers that merely lack a key (error, no percentage, nothing to show)
+// are hidden everywhere: panel rows, bar segments, tooltip, status line. The
+// settings page still lists every provider for adding keys.
+function presentableEntries(entries) {
+  var source = listOf(entries)
+  var result = []
+  for (var i = 0; i < source.length; i++)
+    if (!agentNeedsKey(source[i])) result.push(source[i])
+  return result
+}
+
 function needsKeyEntries(entries) {
   var source = listOf(entries)
   var result = []
