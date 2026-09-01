@@ -5,14 +5,37 @@ native bar item and glanceable dashboard show Claude accounts, other configured
 agents, relative resets, and safe account controls. The plugin shares no QML
 with AI Usage Bar.
 
-## Install
+![Switchboard panel](preview.png)
 
-Install the fork's `ai-usagebar` binary first, then add this repository as an
-Omarchy plugin:
+## Requirements
+
+Switchboard is a frontend for the `ai-usagebar` **fork** that adds flat Claude
+account management (save, switch, rename, marker-trusted resync) and the
+report fields this plugin renders. Install the fork binary first:
 
 ```bash
-omarchy plugin add https://github.com/leoom/switchboard
+cargo install --git https://github.com/leoom/ai-usagebar --branch whkey-options
 ```
+
+With the unmodified upstream `ai-usagebar` the plugin still shows usage, but
+account rows are display-only (no save, switch, or rename) and the unsaved-login
+helper never appears.
+
+## Install
+
+```bash
+omarchy plugin add https://github.com/leoom/switchboard --enable
+```
+
+## Remove
+
+```bash
+omarchy plugin remove leoom.switchboard
+```
+
+Removal deletes the plugin folder and its bar entry. Switchboard stores no data
+of its own: usage caches and credentials belong to the `ai-usagebar` backend
+(`~/.cache/ai-usagebar`, `~/.claude`, `~/.config/ai-usagebar/config.toml`).
 
 Switchboard resolves the backend in this order: `AIUSAGEBAR_BIN`,
 `$HOME/.local/bin/ai-usagebar`, then `ai-usagebar` on `PATH`. The environment
@@ -39,7 +62,9 @@ The dashboard is one screen with these sections:
 
 - `CLAUDE`: one compact line and meter per account. Only the active row adds a
   caption with its 5-hour and 7-day windows and relative reset times. An
-  unmanaged default login gets a validated inline Save field.
+  unmanaged default login gets a validated inline Save field. Rows backed by a
+  saved account offer an inline rename (pencil, validated, Esc cancels), and a
+  one-line hint explains how to add a second account until two exist.
 - `AGENTS`: one line and meter per other agent. Metric details move to row
   tooltips; key failures become a compact `needs key →` link into settings.
 - `AUTO-SWITCH`: a persistent toggle, a live explanation naming the active
@@ -93,6 +118,7 @@ omarchy-shell leoom.switchboard toggle
 omarchy-shell leoom.switchboard refresh
 omarchy-shell leoom.switchboard toggleAccount
 omarchy-shell leoom.switchboard status
+omarchy-shell leoom.switchboard settings
 ```
 
 `toggleAccount` runs the backend's guarded manual account toggle regardless of
@@ -104,3 +130,8 @@ bind = CTRL ALT SHIFT, S, exec, omarchy-shell leoom.switchboard toggleAccount
 
 Busy `refresh` and `toggleAccount` IPC calls return `busy`; panel toggling and
 the last-known compact status line remain available.
+
+## License
+
+MIT — see [LICENSE](LICENSE). The plugin bundles no third-party assets; glyphs
+come from the system's Nerd Font and all styling from the active Omarchy theme.
