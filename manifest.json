@@ -22,9 +22,10 @@
     "defaultSection": "right",
     "defaults": {
       "refreshIntervalSec": 300,
-      "compactBar": true,
+      "barShows": "iconpct",
       "autoSwitch": false,
-      "autoThreshold": 85
+      "autoThreshold": 85,
+      "alerts": false
     },
     "schema": [
       {
@@ -37,11 +38,16 @@
         "defaultValue": 300
       },
       {
-        "key": "compactBar",
-        "type": "boolean",
-        "label": "Compact bar labels",
-        "description": "Use short family tags instead of full provider short names.",
-        "defaultValue": true
+        "key": "barShows",
+        "type": "enum",
+        "label": "Bar display",
+        "description": "Show family glyphs alone, with percentages, or with provider names and percentages.",
+        "options": [
+          "icon",
+          "iconpct",
+          "full"
+        ],
+        "defaultValue": "iconpct"
       },
       {
         "key": "autoSwitch",
@@ -58,6 +64,13 @@
         "max": 95,
         "step": 5,
         "defaultValue": 85
+      },
+      {
+        "key": "alerts",
+        "type": "boolean",
+        "label": "Threshold alerts",
+        "description": "Notify once when a primary usage window crosses 75% or 90%.",
+        "defaultValue": false
       }
     ]
   }

@@ -3,6 +3,17 @@
 
 var MAX_ENTRIES = 64
 var MAX_SECTIONS = 96
+var FALLBACK_FAMILY_GLYPH = "󰚩"
+var FAMILY_GLYPHS = {
+  anthropic: "󰛄",
+  openai: "󱢆",
+  kimi: "󰚩",
+  grok: "󰬈",
+  supergrok: "󰬈",
+  openrouter: "󱙺",
+  deepseek: "󰧑",
+  zai: "󰚩"
+}
 
 function cleanText(value, maxLength) {
   var text = value === undefined || value === null ? "" : String(value)
@@ -139,6 +150,11 @@ function parseReport(raw) {
 function familyId(entryOrId) {
   var id = entryOrId && typeof entryOrId === "object" ? entryOrId.id : entryOrId
   return String(id || "").split("@")[0]
+}
+
+function familyGlyph(entryOrFamily) {
+  var family = familyId(entryOrFamily)
+  return FAMILY_GLYPHS[family] || FALLBACK_FAMILY_GLYPH
 }
 
 function isClaudeEntry(entry) {
@@ -301,10 +317,53 @@ function formatClock(value) {
   return ("0" + date.getHours()).slice(-2) + ":" + ("0" + date.getMinutes()).slice(-2)
 }
 
-function resetClock(metric) {
-  if (!metric || !metric.reset_at) return "—"
-  var ms = new Date(String(metric.reset_at)).getTime()
-  return isFinite(ms) ? formatClock(ms) : "—"
+function relativeReset(resetAtIso, nowMs) {
+  if (resetAtIso === undefined || resetAtIso === null || String(resetAtIso).trim() === "") return ""
+  var resetMs = new Date(String(resetAtIso)).getTime()
+  var currentMs = Number(nowMs)
+  if (!isFinite(resetMs) || !isFinite(currentMs) || resetMs <= currentMs) return ""
+
+  var remainingMs = resetMs - currentMs
+  var totalMinutes = Math.floor(remainingMs / 60000)
+  var days = Math.floor(totalMinutes / 1440)
+  if (days > 0) {
+    var dayHours = Math.floor((totalMinutes % 1440) / 60)
+    return "resets " + days + "d" + (dayHours > 0 ? " " + dayHours + "h" : "")
+  }
+
+  var hours = Math.floor(totalMinutes / 60)
+  var minutes = totalMinutes % 60
+  if (hours > 0) return "resets " + hours + "h " + minutes + "m"
+  return "resets " + minutes + "m"
+}
+
+function claudeMeterCaption(entry, nowMs) {
+  var pair = claudeMetrics(entry)
+  var primaryReset = pair.primary ? relativeReset(pair.primary.reset_at, nowMs) : ""
+  var secondaryReset = pair.secondary ? relativeReset(pair.secondary.reset_at, nowMs) : ""
+  var primary = pair.primary ? "5h" + (primaryReset ? " · " + primaryReset : "") : "5h · —"
+  var secondary = pair.secondary ? "7d " + pair.secondary.percent + "%"
+    + (secondaryReset ? " · " + secondaryReset : "") : "7d —"
+  return primary + "   ·   " + secondary
+}
+
+function agentMeterCaption(entry, nowMs) {
+  var pair = agentMetrics(entry)
+  var primary = "—"
+  if (pair.primary) {
+    var primaryLabel = shortMetricLabel(pair.primary.label) || "usage"
+    var primaryReset = relativeReset(pair.primary.reset_at, nowMs)
+    primary = primaryLabel + (primaryReset ? " · " + primaryReset : "")
+  }
+
+  var secondary = "—"
+  if (pair.secondary) {
+    var secondaryLabel = shortMetricLabel(pair.secondary.label) || "weekly"
+    var secondaryReset = relativeReset(pair.secondary.reset_at, nowMs)
+    secondary = secondaryLabel + " " + pair.secondary.percent + "%"
+      + (secondaryReset ? " · " + secondaryReset : "")
+  }
+  return primary + "   ·   " + secondary
 }
 
 function activeAccountLabel(entries) {
@@ -385,7 +444,25 @@ function familyAggregates(entries) {
   return families
 }
 
-function buildBarSegments(entries, compact) {
+function barShowsSetting(value) {
+  var mode = String(value === undefined || value === null ? "" : value).trim().toLowerCase()
+  return mode === "icon" || mode === "iconpct" || mode === "full" ? mode : "iconpct"
+}
+
+function barSegmentText(segment, barShows) {
+  var item = segment && typeof segment === "object" ? segment : {}
+  var mode = barShowsSetting(barShows)
+  var glyph = item.glyph || familyGlyph(item.family)
+  var percent = finitePercent(item.percent)
+  if (mode === "icon") return glyph
+  if (mode === "iconpct") return glyph + (percent === null ? "" : " " + percent + "%")
+  var shortName = autoTextSafe(item.shortName, 24).trim()
+  if (shortName === "") shortName = autoTextSafe(item.family, 24).trim()
+  return glyph + (shortName === "" ? "" : " " + shortName)
+    + (percent === null ? "" : " " + percent + "%")
+}
+
+function buildBarSegments(entries, barShows) {
   var families = familyAggregates(entries)
   families.sort(function(a, b) {
     if (a.family === "anthropic" && b.family !== "anthropic") return -1
@@ -397,39 +474,95 @@ function buildBarSegments(entries, compact) {
   })
   var shown = families.slice(0, 4)
   var initials = {}
-  for (var i = 0; i < shown.length; i++) {
-    var initial = shown[i].shortName === "" ? "?" : shown[i].shortName.charAt(0).toUpperCase()
-    shown[i]._initial = initial
+  for (var initialIndex = 0; initialIndex < shown.length; initialIndex++) {
+    var initial = shown[initialIndex].shortName === ""
+      ? "?" : shown[initialIndex].shortName.charAt(0).toUpperCase()
+    shown[initialIndex]._initial = initial
     initials[initial] = (initials[initial] || 0) + 1
   }
-
   var result = []
-  for (var j = 0; j < shown.length; j++) {
-    var item = shown[j]
-    var tag = compact === false
-      ? item.shortName
-      : initials[item._initial] > 1 ? item.shortName : item._initial
-    result.push({
+  var mode = barShowsSetting(barShows)
+  for (var i = 0; i < shown.length; i++) {
+    var item = shown[i]
+    var segment = {
       family: item.family,
       shortName: item.shortName,
-      tag: tag,
+      tag: initials[item._initial] > 1 ? item.shortName : item._initial,
+      glyph: familyGlyph(item.family),
       percent: item.percent,
       error: item.error,
       severity: item.error ? "critical" : severityBand(item.percent)
-    })
+    }
+    segment.text = barSegmentText(segment, mode)
+    result.push(segment)
   }
   return result
 }
 
 function statusLine(entries) {
   var active = activeAccountLabel(entries)
-  var segments = buildBarSegments(entries, false)
+  var segments = buildBarSegments(entries, "full")
   var line = "active=" + (active === "" ? "none" : autoTextSafe(active, 120))
   for (var i = 0; i < segments.length; i++) {
     line += " " + autoTextSafe(segments[i].shortName, 24) + "="
       + (segments[i].percent === null ? "–" : segments[i].percent + "%")
   }
   return line
+}
+
+function alertDecisions(entries, armedState, opts) {
+  var sourceState = armedState && typeof armedState === "object" && !Array.isArray(armedState)
+    ? armedState : {}
+  var nextState = {}
+  var stateKey
+  for (stateKey in sourceState) {
+    if (stateKey === "__proto__" || stateKey === "constructor" || stateKey === "prototype") continue
+    nextState[stateKey] = sourceState[stateKey] === true
+  }
+
+  var options = opts && typeof opts === "object" ? opts : {}
+  var enabled = options.enabled === undefined ? options.alerts === true : options.enabled === true
+  if (!enabled) return { notifications: [], armedState: nextState }
+
+  var notifications = []
+  var source = Array.isArray(entries) ? entries : []
+  var levels = [
+    { name: "Warn", threshold: 75 },
+    { name: "Critical", threshold: 90 }
+  ]
+
+  for (var i = 0; i < source.length; i++) {
+    var entry = source[i]
+    if (!entry || entry.stale === true || entry.status === "error" || String(entry.error || "") !== "")
+      continue
+    var metric = isClaudeEntry(entry) ? claudeMetrics(entry).primary : agentMetrics(entry).primary
+    var percent = metric ? finitePercent(metric.percent) : null
+    if (!metric || percent === null) continue
+
+    var metricLabel = autoTextSafe(metric.label, 160).trim() || "usage"
+    var windowLabel = isClaudeEntry(entry) && /5h/i.test(metricLabel)
+      ? "5h" : shortMetricLabel(metricLabel) || "usage"
+    var entryId = cleanText(entry.id, 180).trim()
+    var entryName = isClaudeEntry(entry) ? claudeEntryName(entry) : agentEntryName(entry)
+
+    for (var j = 0; j < levels.length; j++) {
+      var level = levels[j]
+      stateKey = entryId + "\u001f" + metricLabel + "\u001f" + level.name
+      var armed = sourceState[stateKey] !== false
+      if (percent < level.threshold) {
+        nextState[stateKey] = true
+      } else {
+        nextState[stateKey] = false
+        if (armed) {
+          notifications.push(["notify-send", "-a", "Switchboard",
+            entryName + " " + windowLabel + " at " + percent + "%",
+            level.name + " threshold crossed"])
+        }
+      }
+    }
+  }
+
+  return { notifications: notifications, armedState: nextState }
 }
 
 function autoSwitchDecision(entries, opts) {

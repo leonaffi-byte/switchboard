@@ -24,9 +24,10 @@ BarWidget {
   function settingsSnapshot() {
     return {
       refreshIntervalSec: Model.integerSetting(setting("refreshIntervalSec", 300), 300, 60, 3600, 1),
-      compactBar: Model.booleanSetting(setting("compactBar", true), true),
+      barShows: Model.barShowsSetting(setting("barShows", "iconpct")),
       autoSwitch: Model.booleanSetting(setting("autoSwitch", false), false),
-      autoThreshold: Model.integerSetting(setting("autoThreshold", 85), 85, 50, 95, 5)
+      autoThreshold: Model.integerSetting(setting("autoThreshold", 85), 85, 50, 95, 5),
+      alerts: Model.booleanSetting(setting("alerts", false), false)
     }
   }
 
@@ -173,7 +174,7 @@ BarWidget {
 
             Text {
               textFormat: Text.PlainText
-              text: modelData.tag + (modelData.percent === null ? "" : " " + modelData.percent + "%")
+              text: modelData.text
               color: Model.severityColor(modelData.percent, root.palette, modelData.error)
               font.family: Style.font.family
               font.pixelSize: Style.font.caption

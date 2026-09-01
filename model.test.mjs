@@ -98,6 +98,14 @@ test('grouping separates Claude accounts from every other agent', () => {
   assert.deepEqual(Array.from(grouped.agents, entry => entry.id), ['openai', 'grok@x', 'supergrok']);
 });
 
+test('family glyph map covers known providers and falls back without assets', () => {
+  assert.deepEqual([
+    'anthropic', 'openai', 'kimi', 'grok', 'supergrok', 'openrouter', 'deepseek', 'zai'
+  ].map(model.familyGlyph), ['󰛄', '󱢆', '󰚩', '󰬈', '󰬈', '󱙺', '󰧑', '󰚩']);
+  assert.equal(model.familyGlyph('unlisted@account'), '󰚩');
+  assert.equal(model.familyGlyph({id: 'openai@work'}), '󱢆');
+});
+
 test('metric roles are label-driven for Claude and order-preserving for agents', () => {
   const reversedClaude = {sections: [metric('Weekly (7d)', 60), metric('Session (5h)', 20)]};
   assert.equal(model.claudeMetrics(reversedClaude).primary.percent, 20);
@@ -114,6 +122,8 @@ test('metric roles are label-driven for Claude and order-preserving for agents',
   assert.equal(roles.secondary.label, 'Backup wk pool');
   assert.equal(model.shortMetricLabel('Weekly allowance'), 'Weekly …');
   assert.ok(model.shortMetricLabel('Weekly allowance').length <= 8);
+  assert.equal(model.agentMeterCaption(kimiWeeklyFirst, Date.now()),
+    'Weekly …   ·   Backup … 31%');
 });
 
 test('entry names follow the corrected Claude and agent rules', () => {
@@ -140,6 +150,27 @@ test('severity boundaries map to the five supported theme roles', () => {
   assert.equal(model.severityColor(2, palette, true), 'urgent');
   assert.equal(model.finitePercent(null), null);
   assert.equal(model.formatClock(0), '');
+});
+
+test('relative resets cover absent, past, sub-hour, hourly, and multi-day boundaries', () => {
+  const now = Date.UTC(2026, 8, 1, 10, 0, 0);
+  const resetAt = deltaMs => new Date(now + deltaMs).toISOString();
+  assert.equal(model.relativeReset('', now), '');
+  assert.equal(model.relativeReset(null, now), '');
+  assert.equal(model.relativeReset('not-a-date', now), '');
+  assert.equal(model.relativeReset(resetAt(-1), now), '');
+  assert.equal(model.relativeReset(resetAt(0), now), '');
+  assert.equal(model.relativeReset(resetAt(59_000), now), 'resets 0m');
+  assert.equal(model.relativeReset(resetAt(12 * 60_000 + 59_000), now), 'resets 12m');
+  assert.equal(model.relativeReset(resetAt((4 * 60 + 54) * 60_000), now), 'resets 4h 54m');
+  assert.equal(model.relativeReset(resetAt((32 * 60 + 27) * 60_000), now), 'resets 1d 8h');
+
+  const entry = claude('anthropic', true, 54, {sections: [
+    metric('Session (5h)', 54, resetAt((4 * 60 + 54) * 60_000)),
+    metric('Weekly (7d)', 22, resetAt(32 * 60 * 60_000))
+  ]});
+  assert.equal(model.claudeMeterCaption(entry, now),
+    '5h · resets 4h 54m   ·   7d 22% · resets 1d 8h');
 });
 
 test('save labels are safely suggested and strictly validated', () => {
@@ -200,7 +231,7 @@ test('auto-switch honors threshold, margin, cooldown, exclusions, and determinis
   assert.equal(result.label, 'alpha');
 });
 
-test('family segments use corrected ordering, aggregation, collisions, and error state', () => {
+test('family segments use corrected ordering, aggregation, collisions, glyphs, and error state', () => {
   const entries = [
     {...claude('anthropic', true, 42), short_name: 'claude'},
     {...claude('anthropic@work', false, 95), short_name: 'claude'},
@@ -210,20 +241,29 @@ test('family segments use corrected ordering, aggregation, collisions, and error
     {id: 'kimi@cpx-x', short_name: 'kimi', status: 'ready', error: '', sections: [metric('Weekly', 90)]}
   ];
 
-  const compact = model.buildBarSegments(entries, true);
-  assert.deepEqual(Array.from(compact, row => row.family), ['anthropic', 'kimi', 'openai', 'supergrok']);
-  assert.equal(compact[0].percent, 42); // active Claude only, not the 95% inactive account
-  assert.deepEqual(Array.from(compact, row => row.tag), ['C', 'K', 'G', 'S']);
+  const segments = model.buildBarSegments(entries, 'iconpct');
+  assert.deepEqual(Array.from(segments, row => row.family), ['anthropic', 'kimi', 'openai', 'supergrok']);
+  assert.equal(segments[0].percent, 42); // active Claude only, not the 95% inactive account
+  assert.deepEqual(Array.from(segments, row => row.tag), ['C', 'K', 'G', 'S']);
+  assert.deepEqual(Array.from(segments, row => row.glyph), ['󰛄', '󰚩', '󱢆', '󰬈']);
 
-  const collision = model.buildBarSegments(entries.filter(row => ['openai', 'grok@x'].includes(row.id)), true);
+  const collision = model.buildBarSegments(entries.filter(row => ['openai', 'grok@x'].includes(row.id)), 'iconpct');
   assert.deepEqual(Array.from(collision, row => row.tag), ['gpt', 'grok']);
   assert.equal(collision.find(row => row.family === 'grok').severity, 'critical');
   assert.equal(collision.find(row => row.family === 'grok').percent, null);
 
-  const words = model.buildBarSegments(entries, false);
-  assert.deepEqual(Array.from(words, row => row.tag), ['claude', 'kimi', 'gpt', 'sg']);
   assert.equal(model.familyId({id: 'grok@x'}), 'grok');
   assert.equal(model.familyId({id: 'supergrok'}), 'supergrok');
+});
+
+test('bar text supports icon, icon plus percent, and full display modes', () => {
+  const entry = {...claude('anthropic', true, 42), short_name: 'claude'};
+  assert.equal(model.buildBarSegments([entry], 'icon')[0].text, '󰛄');
+  assert.equal(model.buildBarSegments([entry], 'iconpct')[0].text, '󰛄 42%');
+  assert.equal(model.buildBarSegments([entry], 'full')[0].text, '󰛄 claude 42%');
+  assert.equal(model.buildBarSegments([{id: 'grok', short_name: 'grok', status: 'ready', sections: []}], 'full')[0].text,
+    '󰬈 grok');
+  assert.equal(model.barShowsSetting('bad-value'), 'iconpct');
 });
 
 test('IPC status uses the same shown families and active label', () => {
@@ -258,17 +298,59 @@ test('stderr redaction removes long secret-like runs before sanitizing and cappi
   assert.ok(model.stderrLine('x '.repeat(400)).length <= 300);
 });
 
+test('threshold alerts cross once, do not repeat, and re-arm after a reset', () => {
+  const withPercent = percent => [{...claude('anthropic', true, percent), account_label: 'main'}];
+
+  const first = model.alertDecisions(withPercent(75), {}, {enabled: true});
+  assert.deepEqual(Array.from(first.notifications[0]), [
+    'notify-send', '-a', 'Switchboard', 'main 5h at 75%', 'Warn threshold crossed'
+  ]);
+  assert.equal(first.notifications.length, 1);
+
+  const repeated = model.alertDecisions(withPercent(89), first.armedState, {enabled: true});
+  assert.equal(repeated.notifications.length, 0);
+
+  const critical = model.alertDecisions(withPercent(90), repeated.armedState, {enabled: true});
+  assert.equal(critical.notifications.length, 1);
+  assert.equal(critical.notifications[0][4], 'Critical threshold crossed');
+
+  const stillHigh = model.alertDecisions(withPercent(95), critical.armedState, {enabled: true});
+  assert.equal(stillHigh.notifications.length, 0);
+
+  const reset = model.alertDecisions(withPercent(20), stillHigh.armedState, {enabled: true});
+  assert.equal(reset.notifications.length, 0);
+  const crossedAgain = model.alertDecisions(withPercent(91), reset.armedState, {enabled: true});
+  assert.deepEqual(Array.from(crossedAgain.notifications, command => command[4]),
+    ['Warn threshold crossed', 'Critical threshold crossed']);
+});
+
+test('threshold alerts stay inert while disabled and are keyed per entry window', () => {
+  const high = {...claude('anthropic@work', false, 95), account_label: 'work'};
+  const off = model.alertDecisions([high], {existing: false}, {enabled: false});
+  assert.equal(off.notifications.length, 0);
+  assert.deepEqual(JSON.parse(JSON.stringify(off.armedState)), {existing: false});
+
+  const on = model.alertDecisions([high], off.armedState, {enabled: true});
+  assert.equal(on.notifications.length, 2);
+  assert.match(on.notifications[0][3], /^work 5h at 95%$/u);
+
+  const changedWindow = {...high, sections: [metric('Alternate session', 95)]};
+  const changed = model.alertDecisions([changedWindow], on.armedState, {enabled: true});
+  assert.equal(changed.notifications.length, 2);
+});
+
 test('settings helpers preserve unknown keys and clamp manifest values', () => {
-  const original = {id: 'old', compactBar: true, future: {keep: true}};
+  const original = {id: 'old', legacy: true, future: {keep: true}};
   const next = model.settingsWithOverrides(original, 'leoom.switchboard', {autoSwitch: true});
   assert.equal(next.id, 'leoom.switchboard');
-  assert.equal(next.compactBar, true);
+  assert.equal(next.legacy, true);
   assert.equal(next.autoSwitch, true);
   assert.deepEqual(JSON.parse(JSON.stringify(next.future)), {keep: true});
   assert.equal(original.autoSwitch, undefined);
   assert.equal(model.booleanSetting('false', true), false);
   assert.equal(model.integerSetting(97, 85, 50, 95, 5), 95);
   assert.equal(model.integerSetting(83, 85, 50, 95, 5), 85);
+  assert.equal(model.barShowsSetting('FULL'), 'full');
 });
 
 test('binary candidates preserve override, local install, and PATH order', () => {
@@ -287,8 +369,15 @@ test('manifest and QML retain the required plugin lifecycle contracts', () => {
   assert.equal(manifest.keepLoaded, true);
   assert.deepEqual(manifest.entryPoints, {service: 'Service.qml', barWidget: 'BarWidget.qml'});
   assert.deepEqual(manifest.barWidget.defaults, {
-    refreshIntervalSec: 300, compactBar: true, autoSwitch: false, autoThreshold: 85
+    refreshIntervalSec: 300, barShows: 'iconpct', autoSwitch: false, autoThreshold: 85, alerts: false
   });
+  const barShowsSchema = manifest.barWidget.schema.find(row => row.key === 'barShows');
+  assert.equal(barShowsSchema.type, 'enum');
+  assert.deepEqual(barShowsSchema.options, ['icon', 'iconpct', 'full']);
+  assert.equal(barShowsSchema.defaultValue, 'iconpct');
+  const alertsSchema = manifest.barWidget.schema.find(row => row.key === 'alerts');
+  assert.equal(alertsSchema.type, 'boolean');
+  assert.equal(alertsSchema.defaultValue, false);
 
   const bar = fs.readFileSync(new URL('./BarWidget.qml', import.meta.url), 'utf8');
   assert.match(bar, /readonly property bool opened:/);
@@ -298,6 +387,9 @@ test('manifest and QML retain the required plugin lifecycle contracts', () => {
   assert.match(bar, /registerWidget\(root\)/);
   assert.match(bar, /Model\.settingsWithOverrides\(root\.settings, root\.moduleName, values\)/);
   assert.match(bar, /bar\.shell\.updateEntryInline\(root\.moduleName, entry\)/);
+  assert.match(bar, /setting\("barShows", "iconpct"\)/);
+  assert.doesNotMatch(bar, /setting\("compactBar"/);
+  assert.match(bar, /text:\s*modelData\.text/);
   assert.doesNotMatch(bar, /onWheelMoved/);
 
   const service = fs.readFileSync(new URL('./Service.qml', import.meta.url), 'utf8');
@@ -307,6 +399,7 @@ test('manifest and QML retain the required plugin lifecycle contracts', () => {
   assert.match(service, /"account", "save", String\(label\)/);
   assert.match(service, /"account", "toggle"/);
   assert.match(service, /\["notify-send", "-a", "Switchboard", "Claude auto-switch"/);
+  assert.match(service, /Model\.alertDecisions\(parsed\.entries, alertArmedState,/);
   assert.doesNotMatch(service, /--force/);
   assert.equal((service.match(/root\.completionsPending\+\+/g) || []).length, 5);
   assert.equal((service.match(/root\.completionsPending--/g) || []).length, 5);
@@ -317,6 +410,11 @@ test('manifest and QML retain the required plugin lifecycle contracts', () => {
   const autoAt = panel.indexOf('text: "Auto-switch Claude"');
   const statusAt = panel.indexOf('// --------------------------------------------------- status strip');
   assert.ok(claudeAt > 0 && claudeAt < agentsAt && agentsAt < autoAt && autoAt < statusAt);
+  assert.match(panel, /interval:\s*60000/);
+  assert.match(panel, /Model\.claudeMeterCaption\(claudeRow\.entry, root\.nowMs\)/);
+  assert.match(panel, /Model\.agentMeterCaption\(agentRow\.entry, root\.nowMs\)/);
+  assert.match(panel, /Model\.familyGlyph\(/);
+  assert.doesNotMatch(panel, /Model\.resetClock\(/);
   assert.doesNotMatch(panel, /Color\.(?:warning|critical|error)/);
   assert.doesNotMatch(panel, /\bIpcHandler\s*\{/);
 });

@@ -14,9 +14,10 @@ Item {
 
   // Safe defaults apply before the first bar instance pushes its settings.
   property int refreshIntervalSec: 300
-  property bool compactBar: true
+  property string barShows: "iconpct"
   property bool autoSwitch: false
   property int autoThreshold: 85
+  property bool alerts: false
 
   property string resolvedBinary: ""
   property var probeCandidates: []
@@ -32,6 +33,8 @@ Item {
   property string statusError: ""
   property string lastAutoReason: "off"
   property var autoEvent: null
+  property var alertArmedState: ({})
+  property var notificationQueue: []
 
   property bool refreshQueued: false
   property int completionsPending: 0
@@ -57,7 +60,7 @@ Item {
   readonly property var claudeEntries: groupedEntries.claude
   readonly property var agentEntries: groupedEntries.agents
   readonly property var unsavedEntry: Model.unsavedLoginEntry(entries)
-  readonly property var barSegments: Model.buildBarSegments(entries, compactBar)
+  readonly property var barSegments: Model.buildBarSegments(entries, barShows)
   readonly property bool hasReport: lastRefreshMs > 0
   readonly property bool refreshing: usageProcess.running
   readonly property bool busy: probeProcess.running || usageProcess.running
@@ -79,9 +82,10 @@ Item {
   function configure(values) {
     var source = values && typeof values === "object" ? values : {}
     refreshIntervalSec = Model.integerSetting(source.refreshIntervalSec, 300, 60, 3600, 1)
-    compactBar = Model.booleanSetting(source.compactBar, true)
+    barShows = Model.barShowsSetting(source.barShows)
     autoSwitch = Model.booleanSetting(source.autoSwitch, false)
     autoThreshold = Model.integerSetting(source.autoThreshold, 85, 50, 95, 5)
+    alerts = Model.booleanSetting(source.alerts, false)
   }
 
   function registerWidget(widget) {
@@ -196,6 +200,12 @@ Item {
       reportConsumed = true
       lastAutoReason = decision.action === "none" ? decision.reason : "switch"
       if (decision.action === "switch") startAccountSwitch(decision.label, true, decision)
+
+      var alertResult = Model.alertDecisions(parsed.entries, alertArmedState, {
+        enabled: alerts
+      })
+      alertArmedState = alertResult.armedState
+      enqueueNotifications(alertResult.notifications, false)
       return
     }
 
@@ -258,6 +268,39 @@ Item {
     return detail === "" ? fallback : detail
   }
 
+  function enqueueNotification(command, priority) {
+    enqueueNotifications([command], priority)
+  }
+
+  function enqueueNotifications(commands, priority) {
+    var source = Array.isArray(commands) ? commands : []
+    if (source.length === 0) return
+    var next = notificationQueue.slice()
+    for (var i = 0; i < source.length; i++) {
+      if (!Array.isArray(source[i]) || source[i].length < 5) continue
+      if (priority === true) next.unshift(source[i].slice())
+      else next.push(source[i].slice())
+    }
+    notificationQueue = next
+    drainNotificationQueue()
+  }
+
+  function drainNotificationQueue() {
+    if (root.busy || notificationQueue.length === 0) return
+    var next = notificationQueue.slice()
+    var command = next.shift()
+    notificationQueue = next
+    notifyStdout = ""
+    notifyStderr = ""
+    notifyProcess.command = command
+    notifyProcess.running = true
+  }
+
+  function drainWorkQueues() {
+    drainNotificationQueue()
+    drainRefreshQueue()
+  }
+
   function finishSwitch(exitCode) {
     var wasAuto = switchMode === "auto"
     var context = switchContext
@@ -274,11 +317,8 @@ Item {
           to: context.label,
           atMs: lastSwitchMs
         }
-        notifyStdout = ""
-        notifyStderr = ""
-        notifyProcess.command = ["notify-send", "-a", "Switchboard", "Claude auto-switch",
-          context.fromLabel + " " + context.fromPct + "% → " + context.label + " " + context.toPct + "%"]
-        notifyProcess.running = true
+        enqueueNotification(["notify-send", "-a", "Switchboard", "Claude auto-switch",
+          context.fromLabel + " " + context.fromPct + "% → " + context.label + " " + context.toPct + "%"], true)
       }
       return
     }
@@ -321,7 +361,7 @@ Item {
         root.completionsPending--
         if (Number(exitCode) === 0) root.acceptBinary(root.probingCandidate)
         else root.probeNextCandidate()
-        root.drainRefreshQueue()
+        root.drainWorkQueues()
       })
     }
   }
@@ -337,7 +377,7 @@ Item {
       Qt.callLater(function() {
         root.completionsPending--
         root.finishRefresh(exitCode)
-        root.drainRefreshQueue()
+        root.drainWorkQueues()
       })
     }
   }
@@ -353,7 +393,7 @@ Item {
       Qt.callLater(function() {
         root.completionsPending--
         root.finishSwitch(exitCode)
-        root.drainRefreshQueue()
+        root.drainWorkQueues()
       })
     }
   }
@@ -369,7 +409,7 @@ Item {
       Qt.callLater(function() {
         root.completionsPending--
         root.finishSave(exitCode)
-        root.drainRefreshQueue()
+        root.drainWorkQueues()
       })
     }
   }
@@ -384,7 +424,7 @@ Item {
       root.completionsPending++
       Qt.callLater(function() {
         root.completionsPending--
-        root.drainRefreshQueue()
+        root.drainWorkQueues()
       })
     }
   }

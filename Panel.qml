@@ -25,6 +25,7 @@ Panel {
 
   property string saveDraft: ""
   property string saveDraftEntryId: ""
+  property double nowMs: Date.now()
 
   function switchPanel(direction) {
     if (bar && typeof bar.switchPanelFrom === "function")
@@ -49,6 +50,7 @@ Panel {
 
   onOpenedChanged: {
     if (opened) {
+      nowMs = Date.now()
       if (flick) flick.contentY = 0
       syncSaveDraft()
       Qt.callLater(function() { keyCatcher.forceActiveFocus() })
@@ -58,7 +60,17 @@ Panel {
 
   Connections {
     target: root.svc
-    function onEntriesChanged() { Qt.callLater(root.syncSaveDraft) }
+    function onEntriesChanged() {
+      root.nowMs = Date.now()
+      Qt.callLater(root.syncSaveDraft)
+    }
+  }
+
+  Timer {
+    interval: 60000
+    repeat: true
+    running: root.opened
+    onTriggered: root.nowMs = Date.now()
   }
 
   KeyboardPanel {
@@ -388,66 +400,52 @@ Panel {
     }
   }
 
-  component MetricGauge: Item {
-    id: gauge
+  component PlanTag: BorderSurface {
+    id: tag
+    property string plan: ""
+
+    width: Style.space(88)
+    height: Style.space(20)
+    radius: Style.cornerRadius
+    color: Style.normalFillFor(Color.foreground, Color.accent)
+    borderSpec: Border.controlSpec("normal", Color.foreground, Color.accent)
+
+    Text {
+      anchors.fill: parent
+      anchors.leftMargin: Style.space(4)
+      anchors.rightMargin: Style.space(4)
+      verticalAlignment: Text.AlignVCenter
+      horizontalAlignment: Text.AlignHCenter
+      elide: Text.ElideRight
+      textFormat: Text.PlainText
+      text: tag.plan || "—"
+      color: Color.muted
+      font.family: Style.font.family
+      font.pixelSize: Style.font.caption
+    }
+  }
+
+  component PrimaryMeter: Item {
+    id: meter
     property var metric: null
-    property string label: ""
+    property bool failed: false
     readonly property int percent: metric ? Number(metric.percent) : 0
 
-    implicitWidth: Style.space(135)
-    implicitHeight: Math.max(labelText.implicitHeight, track.implicitHeight, valueText.implicitHeight)
+    height: Style.space(4)
 
-    Row {
+    Rectangle {
       anchors.fill: parent
-      spacing: Style.space(4)
+      radius: Style.cornerRadius > 0 ? height / 2 : 0
+      color: Color.muted
+      opacity: 0.24
+    }
 
-      Text {
-        id: labelText
-        width: Style.space(34)
-        anchors.verticalCenter: parent.verticalCenter
-        elide: Text.ElideRight
-        textFormat: Text.PlainText
-        text: gauge.label
-        color: Color.muted
-        font.family: Style.font.family
-        font.pixelSize: Style.font.caption
-      }
-
-      Item {
-        id: track
-        width: Style.space(58)
-        height: Style.space(4)
-        implicitHeight: height
-        anchors.verticalCenter: parent.verticalCenter
-
-        Rectangle {
-          anchors.fill: parent
-          radius: Style.cornerRadius > 0 ? height / 2 : 0
-          color: Color.muted
-          opacity: 0.24
-        }
-
-        Rectangle {
-          visible: !!gauge.metric
-          width: parent.width * Math.max(0, Math.min(100, gauge.percent)) / 100
-          height: parent.height
-          radius: Style.cornerRadius > 0 ? height / 2 : 0
-          color: Model.severityColor(gauge.percent, root.palette, false)
-        }
-      }
-
-      Text {
-        id: valueText
-        width: Style.space(30)
-        anchors.verticalCenter: parent.verticalCenter
-        horizontalAlignment: Text.AlignRight
-        textFormat: Text.PlainText
-        text: gauge.metric ? gauge.percent + "%" : "—"
-        color: gauge.metric
-          ? Model.severityColor(gauge.percent, root.palette, false) : Color.muted
-        font.family: Style.font.family
-        font.pixelSize: Style.font.caption
-      }
+    Rectangle {
+      visible: !!meter.metric
+      width: parent.width * Math.max(0, Math.min(100, meter.percent)) / 100
+      height: parent.height
+      radius: Style.cornerRadius > 0 ? height / 2 : 0
+      color: Model.severityColor(meter.percent, root.palette, meter.failed)
     }
   }
 
@@ -457,8 +455,10 @@ Panel {
     readonly property var metrics: Model.claudeMetrics(entry)
     readonly property bool active: Model.isActiveEntry(entry)
     readonly property bool switchable: Model.isSwitchableEntry(entry)
+    readonly property bool failed: entry.status === "error" || String(entry.error || "") !== ""
+    readonly property int primaryPercent: metrics.primary ? Number(metrics.primary.percent) : 0
 
-    height: Style.space(31)
+    height: Style.space(50)
     opacity: entry.stale === true ? 0.45 : 1
 
     MouseArea {
@@ -468,81 +468,91 @@ Panel {
       onClicked: root.svc.switchEntry(claudeRow.entry)
     }
 
-    Row {
+    Column {
       anchors.fill: parent
-      spacing: Style.space(5)
+      spacing: Style.space(3)
 
-      Item {
-        width: Style.space(18)
-        height: parent.height
-
-        BorderSurface {
-          visible: claudeRow.entry.active === true || claudeRow.entry.active === false
-          width: Style.space(12)
-          height: width
-          anchors.centerIn: parent
-          radius: width / 2
-          color: claudeRow.active ? Color.accent : "transparent"
-          borderSpec: Border.flat(claudeRow.active ? Color.accent : Color.muted, 1)
-        }
-      }
-
-      Text {
-        width: Style.space(112)
-        anchors.verticalCenter: parent.verticalCenter
-        elide: Text.ElideRight
-        textFormat: Text.PlainText
-        text: Model.claudeEntryName(claudeRow.entry)
-        color: Color.foreground
-        opacity: claudeRow.active ? 1 : 0.82
-        font.family: Style.font.family
-        font.pixelSize: Style.font.bodySmall
-      }
-
-      BorderSurface {
-        width: Style.space(72)
+      Row {
+        id: claudeLine
+        width: parent.width
         height: Style.space(20)
-        anchors.verticalCenter: parent.verticalCenter
-        radius: Style.cornerRadius
-        color: Style.normalFillFor(Color.foreground, Color.accent)
-        borderSpec: Border.controlSpec("normal", Color.foreground, Color.accent)
+        spacing: Style.space(5)
+
+        Item {
+          width: Style.space(18)
+          height: parent.height
+
+          BorderSurface {
+            visible: claudeRow.entry.active === true || claudeRow.entry.active === false
+            width: Style.space(12)
+            height: width
+            anchors.centerIn: parent
+            radius: width / 2
+            color: claudeRow.active ? Color.accent : "transparent"
+            borderSpec: Border.flat(claudeRow.active ? Color.accent : Color.muted, 1)
+          }
+        }
 
         Text {
-          anchors.fill: parent
-          anchors.leftMargin: Style.space(4)
-          anchors.rightMargin: Style.space(4)
-          verticalAlignment: Text.AlignVCenter
+          width: Style.space(18)
+          anchors.verticalCenter: parent.verticalCenter
           horizontalAlignment: Text.AlignHCenter
+          textFormat: Text.PlainText
+          text: Model.familyGlyph(claudeRow.entry)
+          color: Model.severityColor(claudeRow.primaryPercent, root.palette, claudeRow.failed)
+          font.family: Style.font.family
+          font.pixelSize: Style.font.bodySmall
+        }
+
+        Text {
+          width: Style.space(205)
+          anchors.verticalCenter: parent.verticalCenter
           elide: Text.ElideRight
           textFormat: Text.PlainText
-          text: claudeRow.entry.plan || "—"
-          color: Color.muted
+          text: Model.claudeEntryName(claudeRow.entry)
+          color: Color.foreground
+          opacity: claudeRow.active ? 1 : 0.82
+          font.family: Style.font.family
+          font.pixelSize: Style.font.bodySmall
+        }
+
+        PlanTag {
+          id: claudePlanTag
+          plan: claudeRow.entry.plan
+        }
+
+        Item {
+          width: Math.max(0, claudeLine.width - Style.space(18) - Style.space(18)
+            - Style.space(205) - claudePlanTag.width - Style.space(45) - 5 * claudeLine.spacing)
+          height: 1
+        }
+
+        Text {
+          width: Style.space(45)
+          anchors.verticalCenter: parent.verticalCenter
+          horizontalAlignment: Text.AlignRight
+          textFormat: Text.PlainText
+          text: claudeRow.metrics.primary ? claudeRow.primaryPercent + "%" : "—"
+          color: claudeRow.metrics.primary
+            ? Model.severityColor(claudeRow.primaryPercent, root.palette, claudeRow.failed) : Color.muted
           font.family: Style.font.family
           font.pixelSize: Style.font.caption
         }
       }
 
-      MetricGauge {
-        width: Style.space(135)
-        height: parent.height
-        label: "5h"
+      PrimaryMeter {
+        width: parent.width
         metric: claudeRow.metrics.primary
-      }
-
-      MetricGauge {
-        width: Style.space(135)
-        height: parent.height
-        label: "7d"
-        metric: claudeRow.metrics.secondary
+        failed: claudeRow.failed
       }
 
       Text {
-        width: Style.space(48)
-        anchors.verticalCenter: parent.verticalCenter
-        horizontalAlignment: Text.AlignRight
+        width: parent.width
+        elide: Text.ElideRight
+        maximumLineCount: 1
         textFormat: Text.PlainText
-        text: Model.resetClock(claudeRow.metrics.primary)
-        color: Color.muted
+        text: Model.claudeMeterCaption(claudeRow.entry, root.nowMs)
+        color: claudeRow.failed ? Color.urgent : Color.muted
         font.family: Style.font.family
         font.pixelSize: Style.font.caption
       }
@@ -558,65 +568,83 @@ Panel {
     readonly property string rowStatus: failed
       ? (String(entry.error || "") || "error")
       : entry.stale === true ? "cached" : (String(entry.status || "") || "ready")
+    readonly property int primaryPercent: metrics.primary ? Number(metrics.primary.percent) : 0
+    readonly property string captionText: metrics.primary
+      ? Model.agentMeterCaption(agentRow.entry, root.nowMs) + "   ·   " + rowStatus
+      : (failed ? rowStatus : (health || "—") + "   ·   " + rowStatus)
 
-    height: Style.space(30)
+    height: Style.space(50)
     opacity: entry.stale === true ? 0.45 : 1
 
-    Row {
+    Column {
       anchors.fill: parent
-      spacing: Style.space(6)
+      spacing: Style.space(3)
 
-      Text {
-        width: Style.space(140)
-        anchors.verticalCenter: parent.verticalCenter
-        elide: Text.ElideRight
-        textFormat: Text.PlainText
-        text: Model.agentEntryName(agentRow.entry)
-        color: Color.foreground
-        font.family: Style.font.family
-        font.pixelSize: Style.font.bodySmall
+      Row {
+        id: agentLine
+        width: parent.width
+        height: Style.space(20)
+        spacing: Style.space(5)
+
+        Text {
+          width: Style.space(18)
+          anchors.verticalCenter: parent.verticalCenter
+          horizontalAlignment: Text.AlignHCenter
+          textFormat: Text.PlainText
+          text: Model.familyGlyph(agentRow.entry)
+          color: Model.severityColor(agentRow.primaryPercent, root.palette, agentRow.failed)
+          font.family: Style.font.family
+          font.pixelSize: Style.font.bodySmall
+        }
+
+        Text {
+          width: Style.space(225)
+          anchors.verticalCenter: parent.verticalCenter
+          elide: Text.ElideRight
+          textFormat: Text.PlainText
+          text: Model.agentEntryName(agentRow.entry)
+          color: Color.foreground
+          font.family: Style.font.family
+          font.pixelSize: Style.font.bodySmall
+        }
+
+        PlanTag {
+          id: agentPlanTag
+          plan: agentRow.entry.plan
+        }
+
+        Item {
+          width: Math.max(0, agentLine.width - Style.space(18) - Style.space(225)
+            - agentPlanTag.width - Style.space(45) - 4 * agentLine.spacing)
+          height: 1
+        }
+
+        Text {
+          width: Style.space(45)
+          anchors.verticalCenter: parent.verticalCenter
+          horizontalAlignment: Text.AlignRight
+          textFormat: Text.PlainText
+          text: agentRow.metrics.primary ? agentRow.primaryPercent + "%" : "—"
+          color: agentRow.metrics.primary
+            ? Model.severityColor(agentRow.primaryPercent, root.palette, agentRow.failed)
+            : agentRow.failed ? Color.urgent : Color.muted
+          font.family: Style.font.family
+          font.pixelSize: Style.font.caption
+        }
       }
 
-      MetricGauge {
-        visible: !!agentRow.metrics.primary
-        width: visible ? Style.space(165) : 0
-        height: parent.height
-        label: agentRow.metrics.primary ? Model.shortMetricLabel(agentRow.metrics.primary.label) : ""
+      PrimaryMeter {
+        width: parent.width
         metric: agentRow.metrics.primary
+        failed: agentRow.failed
       }
 
       Text {
-        visible: !agentRow.metrics.primary
-        width: visible ? Style.space(165) : 0
-        anchors.verticalCenter: parent.verticalCenter
+        width: parent.width
         elide: Text.ElideRight
+        maximumLineCount: 1
         textFormat: Text.PlainText
-        text: agentRow.health || "—"
-        color: agentRow.failed ? Color.urgent : Color.muted
-        font.family: Style.font.family
-        font.pixelSize: Style.font.caption
-      }
-
-      Text {
-        width: Style.space(105)
-        anchors.verticalCenter: parent.verticalCenter
-        elide: Text.ElideRight
-        textFormat: Text.PlainText
-        text: agentRow.metrics.secondary
-          ? Model.shortMetricLabel(agentRow.metrics.secondary.label) + " " + agentRow.metrics.secondary.percent + "%"
-          : "—"
-        color: agentRow.metrics.secondary
-          ? Model.severityColor(agentRow.metrics.secondary.percent, root.palette, false) : Color.muted
-        font.family: Style.font.family
-        font.pixelSize: Style.font.caption
-      }
-
-      Text {
-        width: parent.width - Style.space(428)
-        anchors.verticalCenter: parent.verticalCenter
-        elide: Text.ElideRight
-        textFormat: Text.PlainText
-        text: agentRow.rowStatus
+        text: agentRow.captionText
         color: agentRow.failed ? Color.urgent : Color.muted
         font.family: Style.font.family
         font.pixelSize: Style.font.caption
