@@ -1,0 +1,64 @@
+{
+  "schemaVersion": 1,
+  "id": "leoom.switchboard",
+  "name": "Switchboard",
+  "version": "1.0.0",
+  "license": "MIT",
+  "description": "A compact AI usage dashboard with safe Claude account switching and optional automatic switching.",
+  "kinds": [
+    "service",
+    "bar-widget"
+  ],
+  "keepLoaded": true,
+  "entryPoints": {
+    "service": "Service.qml",
+    "barWidget": "BarWidget.qml"
+  },
+  "barWidget": {
+    "displayName": "Switchboard",
+    "description": "AI usage, Claude accounts, and guarded automatic switching.",
+    "category": "AI",
+    "allowMultiple": false,
+    "defaultSection": "right",
+    "defaults": {
+      "refreshIntervalSec": 300,
+      "compactBar": true,
+      "autoSwitch": false,
+      "autoThreshold": 85
+    },
+    "schema": [
+      {
+        "key": "refreshIntervalSec",
+        "type": "integer",
+        "label": "Refresh interval (seconds)",
+        "min": 60,
+        "max": 3600,
+        "step": 60,
+        "defaultValue": 300
+      },
+      {
+        "key": "compactBar",
+        "type": "boolean",
+        "label": "Compact bar labels",
+        "description": "Use short family tags instead of full provider short names.",
+        "defaultValue": true
+      },
+      {
+        "key": "autoSwitch",
+        "type": "boolean",
+        "label": "Auto-switch Claude",
+        "description": "Switch to a lower-usage saved account when the active 5-hour window reaches the threshold.",
+        "defaultValue": false
+      },
+      {
+        "key": "autoThreshold",
+        "type": "integer",
+        "label": "Auto-switch threshold",
+        "min": 50,
+        "max": 95,
+        "step": 5,
+        "defaultValue": 85
+      }
+    ]
+  }
+}
