@@ -133,6 +133,15 @@ test('entry names follow the corrected Claude and agent rules', () => {
   assert.equal(model.agentEntryName({id: 'openai', display_name: 'Codex'}), 'Codex');
 });
 
+test('needs-key rows are agent errors without a primary percentage', () => {
+  const missing = {id: 'grok', status: 'error', error: 'management key missing', sections: []};
+  const meteredError = {...missing, id: 'zai', sections: [metric('Session', 20)]};
+  assert.equal(model.agentNeedsKey(missing), true);
+  assert.equal(model.agentNeedsKey(meteredError), false);
+  assert.equal(model.agentNeedsKey(claude('anthropic', true, null, {status: 'error', error: 'login'})), false);
+  assert.deepEqual(Array.from(model.needsKeyEntries([missing, meteredError]), row => row.id), ['grok']);
+});
+
 test('switchability requires the explicit false field and a valid bounded label', () => {
   assert.equal(model.isSwitchableEntry({id: 'anthropic@work', active: false}), true);
   assert.equal(model.isSwitchableEntry({id: 'anthropic@work', active: true}), false);
@@ -170,7 +179,7 @@ test('relative resets cover absent, past, sub-hour, hourly, and multi-day bounda
     metric('Weekly (7d)', 22, resetAt(32 * 60 * 60_000))
   ]});
   assert.equal(model.claudeMeterCaption(entry, now),
-    '5h · resets 4h 54m   ·   7d 22% · resets 1d 8h');
+    '5h · resets 4h 54m · 7d 22% · resets 1d 8h');
 });
 
 test('save labels are safely suggested and strictly validated', () => {
@@ -241,13 +250,13 @@ test('family segments use corrected ordering, aggregation, collisions, glyphs, a
     {id: 'kimi@cpx-x', short_name: 'kimi', status: 'ready', error: '', sections: [metric('Weekly', 90)]}
   ];
 
-  const segments = model.buildBarSegments(entries, 'iconpct');
+  const segments = model.buildBarSegments(entries, 'all');
   assert.deepEqual(Array.from(segments, row => row.family), ['anthropic', 'kimi', 'openai', 'supergrok']);
   assert.equal(segments[0].percent, 42); // active Claude only, not the 95% inactive account
   assert.deepEqual(Array.from(segments, row => row.tag), ['C', 'K', 'G', 'S']);
   assert.deepEqual(Array.from(segments, row => row.glyph), ['󰛄', '󰚩', '󱢆', '󰬈']);
 
-  const collision = model.buildBarSegments(entries.filter(row => ['openai', 'grok@x'].includes(row.id)), 'iconpct');
+  const collision = model.buildBarSegments(entries.filter(row => ['openai', 'grok@x'].includes(row.id)), 'all');
   assert.deepEqual(Array.from(collision, row => row.tag), ['gpt', 'grok']);
   assert.equal(collision.find(row => row.family === 'grok').severity, 'critical');
   assert.equal(collision.find(row => row.family === 'grok').percent, null);
@@ -256,14 +265,67 @@ test('family segments use corrected ordering, aggregation, collisions, glyphs, a
   assert.equal(model.familyId({id: 'supergrok'}), 'supergrok');
 });
 
-test('bar text supports icon, icon plus percent, and full display modes', () => {
+test('bar text supports icon, percent, and migrated display modes', () => {
   const entry = {...claude('anthropic', true, 42), short_name: 'claude'};
   assert.equal(model.buildBarSegments([entry], 'icon')[0].text, '󰛄');
   assert.equal(model.buildBarSegments([entry], 'iconpct')[0].text, '󰛄 42%');
-  assert.equal(model.buildBarSegments([entry], 'full')[0].text, '󰛄 claude 42%');
+  assert.equal(model.buildBarSegments([entry], 'full')[0].text, '󰛄 42%');
   assert.equal(model.buildBarSegments([{id: 'grok', short_name: 'grok', status: 'ready', sections: []}], 'full')[0].text,
-    '󰬈 grok');
-  assert.equal(model.barShowsSetting('bad-value'), 'iconpct');
+    '󰬈');
+  assert.equal(model.barShowsSetting('bad-value'), 'claude');
+});
+
+test('bar modes migrate old values and keep Claude minimal by default', () => {
+  const entries = [
+    {...claude('anthropic', true, 42), short_name: 'claude'},
+    {id: 'openai', short_name: 'gpt', status: 'ready', sections: [metric('Session', 80)]}
+  ];
+  assert.deepEqual(Array.from(model.buildBarSegments(entries, 'claude'), row => row.text), ['󰛄 42%']);
+  assert.deepEqual(Array.from(model.buildBarSegments(entries, 'all'), row => row.text),
+    ['󰛄 42%', '󱢆 80%']);
+  assert.deepEqual(Array.from(model.buildBarSegments(entries, 'icon'), row => row.text), ['󰛄', '󱢆']);
+
+  const migration = new Map([
+    ['claude', 'claude'], ['all', 'all'], ['icon', 'icon'],
+    ['iconpct', 'all'], ['full', 'all'], ['FULL', 'all'],
+    ['', 'claude'], ['bad-value', 'claude'], [undefined, 'claude'], [null, 'claude']
+  ]);
+  for (const [input, expected] of migration)
+    assert.equal(model.barShowsSetting(input), expected);
+});
+
+test('Claude bar mode has ordered family and ambiguous-active fallbacks', () => {
+  const withoutClaude = [
+    {id: 'zai', short_name: 'zai', status: 'ready', sections: [metric('Session', 20)]},
+    {id: 'openai', short_name: 'gpt', status: 'ready', sections: [metric('Session', 75)]}
+  ];
+  assert.equal(model.buildBarSegments(withoutClaude, 'claude')[0].family, 'openai');
+
+  const ambiguous = [
+    {...claude('anthropic@home', null, 30), short_name: 'claude'},
+    {...claude('anthropic@work', null, 70), short_name: 'claude'}
+  ];
+  const segment = model.buildBarSegments(ambiguous, 'claude')[0];
+  assert.equal(segment.family, 'anthropic');
+  assert.equal(segment.percent, 70);
+  assert.equal(model.statusLine(ambiguous), 'active=none claude=–');
+});
+
+test('bar tooltip preserves hidden family information with bounds', () => {
+  const entries = [
+    {...claude('anthropic', true, 42), short_name: 'claude'},
+    {id: 'openai', short_name: 'gpt', status: 'ready', sections: [metric('Session', 80)]},
+    {id: 'grok', short_name: 'grok', status: 'error', error: 'auth', sections: []},
+    {id: 'zai', short_name: 'zai', status: 'ready', sections: [metric('Session', 25)]},
+    {id: 'kimi', short_name: 'kimi', status: 'ready', sections: [metric('Weekly', 33)]},
+    {id: 'deepseek', short_name: 'deepseek', status: 'ready', sections: [metric('Session', 15)]}
+  ];
+  const tooltip = model.barTooltip(entries, 'claude');
+  assert.match(tooltip, /^claude 42% · gpt 80%/u);
+  assert.match(tooltip, /grok –/u);
+  assert.equal(tooltip.split(' · ').length, 6);
+  assert.ok(tooltip.length <= 120);
+  assert.equal(model.barTooltip([], 'all'), 'Switchboard');
 });
 
 test('IPC status uses the same shown families and active label', () => {
@@ -287,6 +349,26 @@ test('auto-switch card is an off/armed/event state machine and keeps events acro
   assert.match(model.autoSwitchStatus(true, last), /^last: main → work/u);
   assert.equal(model.autoSwitchStatus(true, failed), 'failed: account switch was refused');
   assert.equal(model.autoSwitchStatus(true, {kind: 'skip', reason: 'cooldown'}), 'armed');
+});
+
+test('auto-switch blurb substitutes the live account and has a safe fallback', () => {
+  assert.equal(model.autoSwitchBlurb([claude('anthropic', true, 44)], 85),
+    'When main passes 85% (5h window), every open terminal switches to your least-used saved account.');
+  assert.equal(model.autoSwitchBlurb([], 90),
+    'When the active account passes 90% (5h window), every open terminal switches to your least-used saved account.');
+  assert.equal(model.autoSwitchBlurb([
+    claude('anthropic@one', true, 44), claude('anthropic@two', true, 33)
+  ], 70),
+  'When the active account passes 70% (5h window), every open terminal switches to your least-used saved account.');
+});
+
+test('main-panel auto-switch events use the redesigned one-line wording', () => {
+  const atMs = new Date(2026, 8, 1, 14, 32).getTime();
+  assert.equal(model.autoSwitchEventText({kind: 'last', from: 'work', to: 'home', atMs}),
+    'switched work → home · 14:32');
+  assert.equal(model.autoSwitchEventText({kind: 'failed', message: 'guard refused'}),
+    'failed: guard refused');
+  assert.equal(model.autoSwitchEventText(null), '');
 });
 
 test('stderr redaction removes long secret-like runs before sanitizing and capping', () => {
@@ -339,6 +421,88 @@ test('threshold alerts stay inert while disabled and are keyed per entry window'
   assert.equal(changed.notifications.length, 2);
 });
 
+test('settings snapshots are strict, sanitized, and bounded', () => {
+  const hostile = `Key\u0000\u202e ${'x'.repeat(160)}`;
+  const primaryChoices = Array.from({length: 70}, (_, index) => ({
+    id: `vendor_${index}`,
+    label: index === 0 ? hostile : `Vendor ${index}`
+  }));
+  const keys = Array.from({length: 40}, (_, index) => ({
+    id: `key_${index}`,
+    label: index === 0 ? hostile : `Key ${index}`,
+    environment: `KEY_${index}`,
+    note: 'note',
+    configured: index === 0,
+    inline_configured: index === 0,
+    environment_configured: index === 1
+  }));
+  primaryChoices.splice(1, 0, {id: '__proto__', label: 'drop'});
+  keys.splice(1, 0, {id: 'Bad id', label: 'drop'});
+
+  const parsed = model.parseSettingsSnapshot(JSON.stringify({
+    schema_version: 1,
+    primary: 'vendor_4',
+    primary_choices: primaryChoices,
+    keys
+  }));
+  assert.equal(parsed.ok, true);
+  assert.equal(parsed.primary, 'vendor_4');
+  assert.equal(parsed.primary_choices.length, 63); // one hostile id within the 64-item input bound
+  assert.equal(parsed.keys.length, 31); // one invalid id within the 32-item input bound
+  assert.ok(parsed.primary_choices[0].label.length <= 120);
+  assert.doesNotMatch(parsed.primary_choices[0].label, /[\u0000\u202e]/u);
+  assert.ok(parsed.keys[0].label.length <= 120);
+  assert.equal(parsed.keys[0].inline_configured, true);
+  assert.equal(parsed.keys[1].environment_configured, true);
+
+  assert.equal(model.parseSettingsSnapshot('{').error,
+    'The settings command returned invalid JSON.');
+  for (const invalid of [
+    {schema_version: 2, primary_choices: [], keys: []},
+    {schema_version: 1, keys: []},
+    {schema_version: 1, primary_choices: []}
+  ]) {
+    const result = model.parseSettingsSnapshot(JSON.stringify(invalid));
+    assert.equal(result.ok, false);
+    assert.equal(result.error, 'The settings command returned an unsupported response.');
+  }
+});
+
+test('settings patches encode only explicit set/clear changes and reject invalid input', () => {
+  const built = model.buildSettingsPatch('', [
+    {id: 'zai', action: 'set', value: 'secret-value'},
+    {id: 'grok', action: 'clear'}
+  ]);
+  assert.equal(built.ok, true);
+  assert.deepEqual(JSON.parse(built.payload), {
+    schema_version: 1,
+    keys: {
+      zai: {action: 'set', value: 'secret-value'},
+      grok: {action: 'clear'}
+    }
+  });
+
+  assert.equal(model.buildSettingsPatch('', []).error,
+    'There are no settings changes to save.');
+  assert.equal(model.buildSettingsPatch('', [{id: 'zai', action: 'set', value: ''}]).error,
+    'An edited API key is empty.');
+  assert.equal(model.buildSettingsPatch('', [{id: 'zai', action: 'unchanged'}]).error,
+    'A settings row has an invalid action.');
+  assert.equal(model.buildSettingsPatch('', [
+    {id: 'zai', action: 'clear'}, {id: 'zai', action: 'clear'}
+  ]).error, 'A settings row has an invalid provider id.');
+});
+
+test('settings apply requires both exit zero and an explicit JSON ok result', () => {
+  assert.equal(model.parseSettingsApplyResult('{"ok":true}'), true);
+  assert.equal(model.parseSettingsApplyResult('{"ok":false}'), false);
+  assert.equal(model.parseSettingsApplyResult('{}'), false);
+  assert.equal(model.parseSettingsApplyResult('{'), false);
+  assert.equal(model.settingsApplySucceeded(0, '{"ok":true}'), true);
+  assert.equal(model.settingsApplySucceeded(0, '{}'), false);
+  assert.equal(model.settingsApplySucceeded(1, '{"ok":true}'), false);
+});
+
 test('settings helpers preserve unknown keys and clamp manifest values', () => {
   const original = {id: 'old', legacy: true, future: {keep: true}};
   const next = model.settingsWithOverrides(original, 'leoom.switchboard', {autoSwitch: true});
@@ -350,7 +514,7 @@ test('settings helpers preserve unknown keys and clamp manifest values', () => {
   assert.equal(model.booleanSetting('false', true), false);
   assert.equal(model.integerSetting(97, 85, 50, 95, 5), 95);
   assert.equal(model.integerSetting(83, 85, 50, 95, 5), 85);
-  assert.equal(model.barShowsSetting('FULL'), 'full');
+  assert.equal(model.barShowsSetting('FULL'), 'all');
 });
 
 test('binary candidates preserve override, local install, and PATH order', () => {
@@ -363,18 +527,20 @@ test('manifest and QML retain the required plugin lifecycle contracts', () => {
   assert.equal(manifest.schemaVersion, 1);
   assert.equal(manifest.id, 'leoom.switchboard');
   assert.equal(manifest.name, 'Switchboard');
-  assert.equal(manifest.version, '1.0.0');
+  assert.equal(manifest.version, '2.0.0');
   assert.equal(manifest.license, 'MIT');
   assert.deepEqual(manifest.kinds, ['service', 'bar-widget']);
   assert.equal(manifest.keepLoaded, true);
   assert.deepEqual(manifest.entryPoints, {service: 'Service.qml', barWidget: 'BarWidget.qml'});
   assert.deepEqual(manifest.barWidget.defaults, {
-    refreshIntervalSec: 300, barShows: 'iconpct', autoSwitch: false, autoThreshold: 85, alerts: false
+    refreshIntervalSec: 300, barShows: 'claude', autoSwitch: false, autoThreshold: 85, alerts: false
   });
+  const refreshSchema = manifest.barWidget.schema.find(row => row.key === 'refreshIntervalSec');
+  assert.equal(refreshSchema.step, 30);
   const barShowsSchema = manifest.barWidget.schema.find(row => row.key === 'barShows');
   assert.equal(barShowsSchema.type, 'enum');
-  assert.deepEqual(barShowsSchema.options, ['icon', 'iconpct', 'full']);
-  assert.equal(barShowsSchema.defaultValue, 'iconpct');
+  assert.deepEqual(barShowsSchema.options, ['claude', 'all', 'icon']);
+  assert.equal(barShowsSchema.defaultValue, 'claude');
   const alertsSchema = manifest.barWidget.schema.find(row => row.key === 'alerts');
   assert.equal(alertsSchema.type, 'boolean');
   assert.equal(alertsSchema.defaultValue, false);
@@ -387,8 +553,13 @@ test('manifest and QML retain the required plugin lifecycle contracts', () => {
   assert.match(bar, /registerWidget\(root\)/);
   assert.match(bar, /Model\.settingsWithOverrides\(root\.settings, root\.moduleName, values\)/);
   assert.match(bar, /bar\.shell\.updateEntryInline\(root\.moduleName, entry\)/);
-  assert.match(bar, /setting\("barShows", "iconpct"\)/);
+  assert.match(bar, /setting\("barShows", "claude"\)/);
   assert.doesNotMatch(bar, /setting\("compactBar"/);
+  assert.match(bar, /WidgetButton\s*\{/);
+  assert.doesNotMatch(bar, /BorderSurface\s*\{/);
+  assert.match(bar, /fontSize:\s*Style\.font\.caption/);
+  assert.match(bar, /tooltipText:\s*root\.svc[\s\S]*?Model\.barTooltip/);
+  assert.match(bar, /refreshIntervalSec:\s*Model\.integerSetting\([^\n]*, 300, 60, 3600, 30\)/);
   // The glyph renders in its own fixed-width box (zero-advance Nerd glyphs
   // must never paint under the digits), with the value as a separate Text.
   assert.match(bar, /text:\s*modelData\.glyph/);
@@ -402,18 +573,28 @@ test('manifest and QML retain the required plugin lifecycle contracts', () => {
   assert.match(service, /"account", "switch", String\(label\), "--cli"/);
   assert.match(service, /"account", "save", String\(label\)/);
   assert.match(service, /"account", "toggle"/);
+  assert.match(service, /\["\/usr\/bin\/env", resolvedBinary, "settings", "show"\]/);
+  assert.match(service, /\["\/usr\/bin\/env", resolvedBinary, "settings", "apply"\]/);
+  assert.match(service, /stdinEnabled:\s*true/);
+  assert.match(service, /write\(root\.settingsApplyPayload \+ "\\n"\)[\s\S]*?settingsApplyPayload = ""/);
+  assert.match(service, /Model\.settingsApplySucceeded\(exitCode, settingsApplyStdout\)/);
+  assert.match(service, /refreshIntervalSec = Model\.integerSetting\([^\n]*, 300, 60, 3600, 30\)/);
   assert.match(service, /\["notify-send", "-a", "Switchboard", "Claude auto-switch"/);
   assert.match(service, /Model\.alertDecisions\(parsed\.entries, alertArmedState,/);
   assert.doesNotMatch(service, /--force/);
-  assert.equal((service.match(/root\.completionsPending\+\+/g) || []).length, 5);
-  assert.equal((service.match(/root\.completionsPending--/g) || []).length, 5);
+  assert.equal((service.match(/root\.completionsPending\+\+/g) || []).length, 7);
+  assert.equal((service.match(/root\.completionsPending--/g) || []).length, 7);
 
   const panel = fs.readFileSync(new URL('./Panel.qml', import.meta.url), 'utf8');
   const claudeAt = panel.indexOf('text: "CLAUDE"');
   const agentsAt = panel.indexOf('text: "AGENTS"');
-  const autoAt = panel.indexOf('text: "Auto-switch Claude"');
+  const autoAt = panel.indexOf('text: "Auto-switch at ≥ "');
   const statusAt = panel.indexOf('// --------------------------------------------------- status strip');
   assert.ok(claudeAt > 0 && claudeAt < agentsAt && agentsAt < autoAt && autoAt < statusAt);
+  assert.match(panel, /contentWidth:\s*panel\.fittedContentWidth\(Style\.space\(300\)\)/);
+  assert.match(panel, /contentHeight:\s*panel\.fittedContentHeight\(column\.implicitHeight, Style\.space\(460\)\)/);
+  assert.match(panel, /padding:\s*Style\.spacing\.panelPadding/);
+  assert.match(panel, /spacing:\s*Style\.spacing\.panelGap/);
   assert.match(panel, /interval:\s*60000/);
   assert.match(panel, /Model\.claudeMeterCaption\(claudeRow\.entry, root\.nowMs\)/);
   assert.match(panel, /Model\.agentMeterCaption\(agentRow\.entry, root\.nowMs\)/);
@@ -421,6 +602,17 @@ test('manifest and QML retain the required plugin lifecycle contracts', () => {
   assert.doesNotMatch(panel, /Model\.resetClock\(/);
   assert.doesNotMatch(panel, /Color\.(?:warning|critical|error)/);
   assert.doesNotMatch(panel, /\bIpcHandler\s*\{/);
+  assert.match(panel, /ToggleSwitch\s*\{/);
+  assert.match(panel, /NumberField\s*\{/);
+  assert.match(panel, /Dropdown\s*\{/);
+  assert.match(panel, /TextField\s*\{[\s\S]*?password:\s*true/);
+  assert.match(panel, /property bool settingsOpen:\s*false/);
+  assert.match(panel, /text:\s*"‹ back"/);
+  assert.match(panel, /stepSize:\s*30/);
+  const mainRows = panel.slice(panel.indexOf('component ClaudeAccountRow'),
+    panel.indexOf('component ProviderKeyRow'));
+  assert.doesNotMatch(mainRows, /wrapMode:\s*Text\.WordWrap/);
+  assert.doesNotMatch(mainRows, /maximumLineCount:\s*2/);
 });
 
 test('alert state follows the account across a slot move, not the entry id', () => {

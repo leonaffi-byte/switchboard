@@ -14,7 +14,7 @@ Item {
 
   // Safe defaults apply before the first bar instance pushes its settings.
   property int refreshIntervalSec: 300
-  property string barShows: "iconpct"
+  property string barShows: "claude"
   property bool autoSwitch: false
   property int autoThreshold: 85
   property bool alerts: false
@@ -35,6 +35,14 @@ Item {
   property var alertArmedState: ({})
   property var notificationQueue: []
 
+  property var settingsSnapshot: ({
+    ok: true, error: "", primary: "", primary_choices: [], keys: []
+  })
+  property bool settingsLoaded: false
+  property bool settingsLoadQueued: false
+  property string settingsError: ""
+  property string settingsStatus: ""
+
   property bool refreshQueued: false
   property int completionsPending: 0
 
@@ -48,12 +56,19 @@ Item {
   property string saveStderr: ""
   property string notifyStdout: ""
   property string notifyStderr: ""
+  property string settingsShowStdout: ""
+  property string settingsShowStderr: ""
+  property string settingsApplyStdout: ""
+  property string settingsApplyStderr: ""
+  property string settingsApplyPayload: ""
 
   property string switchMode: "manual" // manual | toggle | auto
   property var switchContext: null
 
   property var registeredWidgets: []
   property var registeredWidget: null
+
+  signal settingsSaved()
 
   readonly property var groupedEntries: Model.groupEntries(entries)
   readonly property var claudeEntries: groupedEntries.claude
@@ -62,8 +77,10 @@ Item {
   readonly property var barSegments: Model.buildBarSegments(entries, barShows)
   readonly property bool hasReport: lastRefreshMs > 0
   readonly property bool refreshing: usageProcess.running
+  readonly property bool settingsLoading: settingsLoadQueued || settingsShowProcess.running
   readonly property bool busy: probeProcess.running || usageProcess.running
     || switchProcess.running || saveProcess.running || notifyProcess.running
+    || settingsShowProcess.running || settingsApplyProcess.running
     || completionsPending > 0
   readonly property bool anyStale: {
     for (var i = 0; i < entries.length; i++) if (entries[i].stale === true) return true
@@ -80,7 +97,7 @@ Item {
 
   function configure(values) {
     var source = values && typeof values === "object" ? values : {}
-    refreshIntervalSec = Model.integerSetting(source.refreshIntervalSec, 300, 60, 3600, 1)
+    refreshIntervalSec = Model.integerSetting(source.refreshIntervalSec, 300, 60, 3600, 30)
     barShows = Model.barShowsSetting(source.barShows)
     autoSwitch = Model.booleanSetting(source.autoSwitch, false)
     autoThreshold = Model.integerSetting(source.autoThreshold, 85, 50, 95, 5)
@@ -257,6 +274,75 @@ Item {
     return true
   }
 
+  // ------------------------------------------------------- backend settings
+  function requestSettingsSnapshot() {
+    settingsLoaded = false
+    settingsError = ""
+    settingsStatus = ""
+    settingsSnapshot = ({
+      ok: true, error: "", primary: "", primary_choices: [], keys: []
+    })
+    settingsLoadQueued = true
+    return drainSettingsLoadQueue()
+  }
+
+  function drainSettingsLoadQueue() {
+    if (!settingsLoadQueued || root.busy || resolvedBinary === "") return false
+    settingsLoadQueued = false
+    settingsShowStdout = ""
+    settingsShowStderr = ""
+    settingsShowProcess.command = ["/usr/bin/env", resolvedBinary, "settings", "show"]
+    settingsShowProcess.running = true
+    return true
+  }
+
+  function finishSettingsShow(exitCode) {
+    settingsLoaded = true
+    if (Number(exitCode) !== 0) {
+      settingsSnapshot = ({
+        ok: false, error: "", primary: "", primary_choices: [], keys: []
+      })
+      settingsError = failureMessage(exitCode, settingsShowStderr,
+        "settings could not be loaded")
+      return
+    }
+
+    var parsed = Model.parseSettingsSnapshot(settingsShowStdout)
+    if (!parsed.ok) {
+      settingsSnapshot = parsed
+      settingsError = parsed.error
+      return
+    }
+    settingsSnapshot = parsed
+    settingsError = ""
+  }
+
+  function applySettingsPatch(payload) {
+    if (root.busy || resolvedBinary === "" || String(payload || "") === "") return false
+    settingsError = ""
+    settingsStatus = ""
+    settingsApplyStdout = ""
+    settingsApplyStderr = ""
+    settingsApplyPayload = String(payload)
+    settingsApplyProcess.command = ["/usr/bin/env", resolvedBinary, "settings", "apply"]
+    settingsApplyProcess.running = true
+    return true
+  }
+
+  function finishSettingsApply(exitCode) {
+    if (!Model.settingsApplySucceeded(exitCode, settingsApplyStdout)) {
+      settingsError = failureMessage(exitCode, settingsApplyStderr,
+        "The settings command did not confirm the save.")
+      return
+    }
+
+    settingsError = ""
+    settingsSaved()
+    requestSettingsSnapshot()
+    requestAutomaticRefresh()
+    settingsStatus = "Settings saved. Usage is refreshing."
+  }
+
   function failureMessage(exitCode, stderrText, fallback) {
     if (Number(exitCode) === 127) {
       binaryMissing = true
@@ -295,6 +381,7 @@ Item {
   }
 
   function drainWorkQueues() {
+    drainSettingsLoadQueue()
     drainNotificationQueue()
     drainRefreshQueue()
   }
@@ -423,6 +510,43 @@ Item {
       root.completionsPending++
       Qt.callLater(function() {
         root.completionsPending--
+        root.drainWorkQueues()
+      })
+    }
+  }
+
+  Process {
+    id: settingsShowProcess
+    running: false
+    command: ["/usr/bin/env", "ai-usagebar", "settings", "show"]
+    stdout: StdioCollector { waitForEnd: true; onStreamFinished: root.settingsShowStdout = text }
+    stderr: StdioCollector { waitForEnd: true; onStreamFinished: root.settingsShowStderr = text }
+    onExited: function(exitCode) {
+      root.completionsPending++
+      Qt.callLater(function() {
+        root.completionsPending--
+        root.finishSettingsShow(exitCode)
+        root.drainWorkQueues()
+      })
+    }
+  }
+
+  Process {
+    id: settingsApplyProcess
+    running: false
+    command: ["/usr/bin/env", "ai-usagebar", "settings", "apply"]
+    stdinEnabled: true
+    onStarted: {
+      write(root.settingsApplyPayload + "\n")
+      root.settingsApplyPayload = ""
+    }
+    stdout: StdioCollector { waitForEnd: true; onStreamFinished: root.settingsApplyStdout = text }
+    stderr: StdioCollector { waitForEnd: true; onStreamFinished: root.settingsApplyStderr = text }
+    onExited: function(exitCode) {
+      root.completionsPending++
+      Qt.callLater(function() {
+        root.completionsPending--
+        root.finishSettingsApply(exitCode)
         root.drainWorkQueues()
       })
     }

@@ -1,9 +1,9 @@
 # Switchboard
 
 Switchboard is a compact Omarchy shell plugin for the `ai-usagebar` fork. Its
-bar pill summarizes up to four AI-agent families; its single-screen dashboard
-shows every Claude account, the other configured agents, relative resets, and safe
-account controls. The plugin shares no QML with AI Usage Bar.
+native bar item and glanceable dashboard show Claude accounts, other configured
+agents, relative resets, and safe account controls. The plugin shares no QML
+with AI Usage Bar.
 
 ## Install
 
@@ -18,30 +18,44 @@ Switchboard resolves the backend in this order: `AIUSAGEBAR_BIN`,
 `$HOME/.local/bin/ai-usagebar`, then `ai-usagebar` on `PATH`. The environment
 override is useful when testing a local fork build.
 
-The bar widget defaults to a five-minute refresh, glyph-plus-percent segments,
-auto-switch off, an 85% threshold, and threshold alerts off. Its `barShows`
-setting has three modes: `icon` shows family glyphs only, `iconpct` adds each
-percentage, and `full` adds the provider short name too. Left-click opens the
-dashboard; middle-click requests an immediate refresh. Scrolling has no action.
+The bar widget defaults to a five-minute refresh, a single Claude
+glyph-and-percent segment, auto-switch off, an 85% threshold, and usage alerts
+off. Its `barShows` setting has three modes: `claude` shows Claude only, `all`
+shows up to four agent families with percentages, and `icon` shows up to four
+glyphs only. Existing `iconpct` and `full` values migrate to `all`. Left-click
+opens the dashboard; middle-click requests an immediate refresh. Scrolling has
+no action. The tooltip retains status for up to six families in every mode.
+
+## Screenshots
+
+Version 2.0 replaces the former oversized pill and panel with the shell's
+native bar button and compact panel controls. Screenshots should be captured
+with the active Omarchy theme because all spacing, typography, surfaces, and
+colors come directly from that theme.
 
 ## Dashboard
 
 The dashboard is one screen with these sections:
 
-- `CLAUDE`: one compact row per Claude account. The top line contains its radio,
-  family glyph, name, plan tag, and primary 5-hour percentage; a full-width
-  hairline meter sits directly below. The dim caption carries the 5-hour reset
-  plus the secondary 7-day percentage and reset. An unmanaged default login
-  gets an inline validated Save field.
-- `AGENTS`: one row per other agent with the same glyph/name/plan/percentage,
-  hairline-meter, and caption anatomy. The first reported metric remains
-  primary; its own label and relative reset appear in the caption, followed by
-  another weekly-labeled metric when present. Health-only agents show their
-  text status instead.
-- `AUTO-SWITCH`: a persistent toggle and 5-point threshold stepper, followed by
-  the current session's `off`, `armed`, last-switch, or failure status.
+- `CLAUDE`: one compact line and meter per account. Only the active row adds a
+  caption with its 5-hour and 7-day windows and relative reset times. An
+  unmanaged default login gets a validated inline Save field.
+- `AGENTS`: one line and meter per other agent. Metric details move to row
+  tooltips; key failures become a compact `needs key →` link into settings.
+- `AUTO-SWITCH`: a persistent toggle, a live explanation naming the active
+  account, and the most recent switch or failure when one exists. The threshold
+  is edited in settings.
 - A one-line status strip for active work, a missing backend, or the newest
   action error.
+
+The gear button swaps the dashboard for a settings page. It provides native
+controls for bar mode, 60–3600 second refresh cadence in 30-second steps, usage
+alerts, auto-switch, and its 50–95% threshold. The Provider Keys section uses
+the backend's write-only settings bridge: existing values are never loaded into
+the shell, blank fields mean unchanged, and only the explicit clear button
+removes an inline key. Environment-only keys identify their environment and
+cannot be cleared here. Claude, Codex, Cursor, and Kiro continue to authenticate
+through their own CLIs.
 
 ## Auto-switch semantics
 

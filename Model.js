@@ -266,6 +266,31 @@ function agentEntryName(entry) {
   return name === "" ? autoTextSafe(familyId(entry), 120) : name
 }
 
+function agentNeedsKey(entry) {
+  if (!entry || isClaudeEntry(entry)) return false
+  var failed = entry.status === "error" || String(entry.error || "") !== ""
+  return failed && agentMetrics(entry).primary === null
+}
+
+function needsKeyEntries(entries) {
+  var source = listOf(entries)
+  var result = []
+  for (var i = 0; i < source.length; i++)
+    if (agentNeedsKey(source[i])) result.push(source[i])
+  return result
+}
+
+function agentErrorEntries(entries) {
+  var source = listOf(entries)
+  var result = []
+  for (var i = 0; i < source.length; i++) {
+    var entry = source[i]
+    if (!entry || isClaudeEntry(entry)) continue
+    if (entry.status === "error" || String(entry.error || "") !== "") result.push(entry)
+  }
+  return result
+}
+
 function isActiveEntry(entry) {
   return !!(entry && isClaudeEntry(entry) && entry.active === true)
 }
@@ -360,7 +385,7 @@ function claudeMeterCaption(entry, nowMs) {
   var primary = pair.primary ? "5h" + (primaryReset ? " · " + primaryReset : "") : "5h · —"
   var secondary = pair.secondary ? "7d " + pair.secondary.percent + "%"
     + (secondaryReset ? " · " + secondaryReset : "") : "7d —"
-  return primary + "   ·   " + secondary
+  return primary + " · " + secondary
 }
 
 function agentMeterCaption(entry, nowMs) {
@@ -399,6 +424,16 @@ function activeAccountLabel(entries) {
   return label !== "" ? label : "default"
 }
 
+function autoSwitchBlurb(entries, threshold) {
+  var name = activeAccountLabel(entries)
+  if (name === "") name = "the active account"
+  var value = Number(threshold)
+  if (!isFinite(value)) value = 85
+  value = Math.max(0, Math.min(100, Math.round(value)))
+  return "When " + name + " passes " + value
+    + "% (5h window), every open terminal switches to your least-used saved account."
+}
+
 function entryPrimaryPercent(entry) {
   var pair = isClaudeEntry(entry) ? claudeMetrics(entry) : agentMetrics(entry)
   return pair.primary ? finitePercent(pair.primary.percent) : null
@@ -431,10 +466,18 @@ function familyAggregates(entries) {
     var group = byFamily[familyName]
     var representative = group.entries[0]
     var percent = null
+    var activeCount = 0
+    var aggregatePercent = null
+    var aggregateRepresentative = representative
 
     if (familyName === "anthropic") {
-      var activeCount = 0
       for (var a = 0; a < group.entries.length; a++) {
+        var claudePercent = entryPrimaryPercent(group.entries[a])
+        if (claudePercent !== null
+            && (aggregatePercent === null || claudePercent > aggregatePercent)) {
+          aggregatePercent = claudePercent
+          aggregateRepresentative = group.entries[a]
+        }
         if (!isActiveEntry(group.entries[a])) continue
         representative = group.entries[a]
         activeCount++
@@ -454,7 +497,10 @@ function familyAggregates(entries) {
       family: familyName,
       shortName: familyShortName(representative, familyName),
       percent: percent,
-      error: group.error
+      error: group.error,
+      activeCount: activeCount,
+      aggregatePercent: aggregatePercent,
+      aggregateShortName: familyShortName(aggregateRepresentative, familyName)
     })
   }
   return families
@@ -462,7 +508,9 @@ function familyAggregates(entries) {
 
 function barShowsSetting(value) {
   var mode = String(value === undefined || value === null ? "" : value).trim().toLowerCase()
-  return mode === "icon" || mode === "iconpct" || mode === "full" ? mode : "iconpct"
+  if (mode === "icon") return "icon"
+  if (mode === "all" || mode === "iconpct" || mode === "full") return "all"
+  return "claude"
 }
 
 function barSegmentValue(segment, barShows) {
@@ -470,11 +518,7 @@ function barSegmentValue(segment, barShows) {
   var mode = barShowsSetting(barShows)
   var percent = finitePercent(item.percent)
   if (mode === "icon") return ""
-  if (mode === "iconpct") return percent === null ? "" : percent + "%"
-  var shortName = autoTextSafe(item.shortName, 24).trim()
-  if (shortName === "") shortName = autoTextSafe(item.family, 24).trim()
-  return (shortName === "" ? "" : shortName)
-    + (percent === null ? "" : (shortName === "" ? "" : " ") + percent + "%")
+  return percent === null ? "" : percent + "%"
 }
 
 function barSegmentText(segment, barShows) {
@@ -494,7 +538,29 @@ function buildBarSegments(entries, barShows) {
     if (ap !== bp) return bp - ap
     return a.family < b.family ? -1 : a.family > b.family ? 1 : 0
   })
-  var shown = families.slice(0, 4)
+  var mode = barShowsSetting(barShows)
+  var shown
+  if (mode === "claude") {
+    var anthropic = null
+    for (var familyIndex = 0; familyIndex < families.length; familyIndex++) {
+      if (families[familyIndex].family === "anthropic") {
+        anthropic = families[familyIndex]
+        break
+      }
+    }
+    var selected = anthropic || families[0]
+    if (selected && selected.family === "anthropic" && selected.activeCount !== 1) {
+      selected = {
+        family: selected.family,
+        shortName: selected.aggregateShortName,
+        percent: selected.aggregatePercent,
+        error: selected.error
+      }
+    }
+    shown = families.length === 0 ? [] : [selected]
+  } else {
+    shown = families.slice(0, 4)
+  }
   var initials = {}
   for (var initialIndex = 0; initialIndex < shown.length; initialIndex++) {
     var initial = shown[initialIndex].shortName === ""
@@ -503,7 +569,6 @@ function buildBarSegments(entries, barShows) {
     initials[initial] = (initials[initial] || 0) + 1
   }
   var result = []
-  var mode = barShowsSetting(barShows)
   for (var i = 0; i < shown.length; i++) {
     var item = shown[i]
     var segment = {
@@ -522,9 +587,32 @@ function buildBarSegments(entries, barShows) {
   return result
 }
 
+function barTooltip(entries, barShows) {
+  // The argument remains part of the public helper contract even though the
+  // tooltip intentionally preserves every mode's hidden family information.
+  barShowsSetting(barShows)
+  var families = familyAggregates(entries)
+  families.sort(function(a, b) {
+    if (a.family === "anthropic" && b.family !== "anthropic") return -1
+    if (b.family === "anthropic" && a.family !== "anthropic") return 1
+    var ap = a.percent === null ? -1 : a.percent
+    var bp = b.percent === null ? -1 : b.percent
+    if (ap !== bp) return bp - ap
+    return a.family < b.family ? -1 : a.family > b.family ? 1 : 0
+  })
+  var parts = []
+  for (var i = 0; i < families.length && i < 6; i++) {
+    var name = autoTextSafe(families[i].shortName, 24).trim()
+    if (name === "") name = autoTextSafe(families[i].family, 24).trim()
+    parts.push(name + " " + (families[i].percent === null ? "–" : families[i].percent + "%"))
+  }
+  return parts.length === 0 ? "Switchboard" : cleanText(parts.join(" · "), 120)
+}
+
 function statusLine(entries) {
   var active = activeAccountLabel(entries)
-  var segments = buildBarSegments(entries, "full")
+  // IPC is deliberately mode-independent and retains the four-family line.
+  var segments = buildBarSegments(entries, "all")
   var line = "active=" + (active === "" ? "none" : autoTextSafe(active, 120))
   for (var i = 0; i < segments.length; i++) {
     line += " " + autoTextSafe(segments[i].shortName, 24) + "="
@@ -675,6 +763,18 @@ function autoSwitchStatus(enabled, event) {
   return "armed"
 }
 
+function autoSwitchEventText(event) {
+  if (!event || typeof event !== "object") return ""
+  if (event.kind === "last") {
+    var from = autoTextSafe(event.from, 120)
+    var to = autoTextSafe(event.to, 120)
+    var clock = formatClock(event.atMs)
+    return "switched " + from + " → " + to + (clock === "" ? "" : " · " + clock)
+  }
+  if (event.kind === "failed") return "failed: " + stderrLine(event.message)
+  return ""
+}
+
 // Redaction must run before any cleanup or truncation. Long token/path-like
 // runs disappear while ordinary diagnostic prose remains readable.
 function stderrLine(value) {
@@ -700,6 +800,128 @@ function integerSetting(value, fallback, low, high, step) {
   if (isFinite(quantum) && quantum > 1)
     number = Number(low) + Math.round((number - Number(low)) / quantum) * quantum
   return Math.max(Number(low), Math.min(Number(high), number))
+}
+
+function settingsId(value) {
+  var id = cleanText(value, 80).trim()
+  if (!/^[a-z0-9_-]+$/.test(id)
+      || id === "__proto__" || id === "constructor" || id === "prototype") return ""
+  return id
+}
+
+function emptySettingsSnapshot(error) {
+  return {
+    ok: false,
+    error: error,
+    primary: "",
+    primary_choices: [],
+    keys: []
+  }
+}
+
+function parseSettingsSnapshot(raw) {
+  try {
+    var parsed = JSON.parse(String(raw || ""))
+    if (!parsed || Number(parsed.schema_version) !== 1
+        || !Array.isArray(parsed.primary_choices) || !Array.isArray(parsed.keys))
+      return emptySettingsSnapshot("The settings command returned an unsupported response.")
+
+    var choices = []
+    for (var i = 0; i < parsed.primary_choices.length && i < 64; i++) {
+      var choice = parsed.primary_choices[i]
+      var choiceId = settingsId(choice && choice.id)
+      if (choiceId === "") continue
+      choices.push({
+        id: choiceId,
+        value: choiceId,
+        label: cleanText(choice.label, 120) || choiceId
+      })
+    }
+
+    var keys = []
+    for (var j = 0; j < parsed.keys.length && j < 32; j++) {
+      var key = parsed.keys[j]
+      var keyId = settingsId(key && key.id)
+      if (keyId === "") continue
+      keys.push({
+        id: keyId,
+        label: cleanText(key.label, 120) || keyId,
+        environment: cleanText(key.environment, 160),
+        note: cleanText(key.note, 240),
+        configured: key.configured === true,
+        inline_configured: key.inline_configured === true,
+        environment_configured: key.environment_configured === true
+      })
+    }
+
+    var primary = settingsId(parsed.primary)
+    var primaryAvailable = false
+    for (var k = 0; k < choices.length; k++) {
+      if (choices[k].id === primary) {
+        primaryAvailable = true
+        break
+      }
+    }
+    if (!primaryAvailable) primary = choices.length > 0 ? choices[0].id : ""
+    return {
+      ok: true,
+      error: "",
+      primary: primary,
+      primary_choices: choices,
+      keys: keys
+    }
+  } catch (error) {
+    return emptySettingsSnapshot("The settings command returned invalid JSON.")
+  }
+}
+
+function buildSettingsPatch(primary, changes) {
+  var primaryId = settingsId(primary)
+  var rawPrimary = String(primary || "").trim()
+  if (rawPrimary !== "" && primaryId === "")
+    return { ok: false, error: "Choose a valid primary provider.", payload: "" }
+
+  var keys = {}
+  var list = Array.isArray(changes) ? changes : []
+  var seen = []
+  for (var i = 0; i < list.length; i++) {
+    var change = list[i] || {}
+    var id = settingsId(change.id)
+    if (id === "" || seen.indexOf(id) >= 0)
+      return { ok: false, error: "A settings row has an invalid provider id.", payload: "" }
+    seen.push(id)
+    if (change.action === "clear") {
+      keys[id] = { action: "clear" }
+    } else if (change.action === "set") {
+      var value = String(change.value || "")
+      if (value === "")
+        return { ok: false, error: "An edited API key is empty.", payload: "" }
+      if (value.length > 16384)
+        return { ok: false, error: "An API key is too long.", payload: "" }
+      keys[id] = { action: "set", value: value }
+    } else {
+      return { ok: false, error: "A settings row has an invalid action.", payload: "" }
+    }
+  }
+
+  if (primaryId === "" && seen.length === 0)
+    return { ok: false, error: "There are no settings changes to save.", payload: "" }
+  var patch = { schema_version: 1, keys: keys }
+  if (primaryId !== "") patch.primary = primaryId
+  return { ok: true, error: "", payload: JSON.stringify(patch) }
+}
+
+function parseSettingsApplyResult(raw) {
+  try {
+    var parsed = JSON.parse(String(raw || ""))
+    return !!(parsed && parsed.ok === true)
+  } catch (error) {
+    return false
+  }
+}
+
+function settingsApplySucceeded(exitCode, raw) {
+  return Number(exitCode) === 0 && parseSettingsApplyResult(raw)
 }
 
 function settingsWithOverrides(settings, moduleName, overrides) {

@@ -13,7 +13,6 @@ BarWidget {
   readonly property var svc: bar && bar.shell
     ? bar.shell.serviceFor("leoom.switchboard") : null
   property var attachedService: null
-  readonly property color foreground: bar ? bar.barForeground : Color.foreground
   readonly property var palette: ({
     muted: Color.muted,
     foreground: Color.foreground,
@@ -23,8 +22,8 @@ BarWidget {
 
   function settingsSnapshot() {
     return {
-      refreshIntervalSec: Model.integerSetting(setting("refreshIntervalSec", 300), 300, 60, 3600, 1),
-      barShows: Model.barShowsSetting(setting("barShows", "iconpct")),
+      refreshIntervalSec: Model.integerSetting(setting("refreshIntervalSec", 300), 300, 60, 3600, 30),
+      barShows: Model.barShowsSetting(setting("barShows", "claude")),
       autoSwitch: Model.booleanSetting(setting("autoSwitch", false), false),
       autoThreshold: Model.integerSetting(setting("autoThreshold", 85), 85, 50, 95, 5),
       alerts: Model.booleanSetting(setting("alerts", false), false)
@@ -58,6 +57,20 @@ BarWidget {
     persistWidgetSettings({ autoSwitch: enabled === true })
   }
 
+  function setBarShows(value) {
+    persistWidgetSettings({ barShows: Model.barShowsSetting(value) })
+  }
+
+  function setRefreshInterval(value) {
+    persistWidgetSettings({
+      refreshIntervalSec: Model.integerSetting(value, 300, 60, 3600, 30)
+    })
+  }
+
+  function setAlerts(enabled) {
+    persistWidgetSettings({ alerts: enabled === true })
+  }
+
   function setAutoThreshold(value) {
     persistWidgetSettings({
       autoThreshold: Model.integerSetting(value, 85, 50, 95, 5)
@@ -70,7 +83,7 @@ BarWidget {
   function close() { if (panelLoader.item) panelLoader.item.close() }
   function togglePanel() { if (panelLoader.item) panelLoader.item.toggle() }
 
-  readonly property real openPanelIndicatorWidth: pill.implicitWidth
+  readonly property real openPanelIndicatorWidth: button.implicitWidth
   readonly property real openPanelIndicatorHeight: Math.max(Style.space(10), Math.round(Style.bar.iconSlot * 0.55))
   readonly property bool popoutSwitchClosing: panelLoader.item
     ? panelLoader.item.popoutSwitchClosing === true : false
@@ -118,9 +131,11 @@ BarWidget {
     text: ""
     labelVisible: false
     hasVisualContent: true
-    fixedWidth: pill.implicitWidth
+    fixedWidth: segmentRow.implicitWidth + scaledHorizontalMargin * 2
+    fontSize: Style.font.caption
     dimmed: root.svc ? root.svc.anyStale : false
-    tooltipText: "Switchboard · click dashboard · middle-click refresh"
+    tooltipText: root.svc
+      ? Model.barTooltip(root.svc.entries, root.svc.barShows) : "Switchboard"
 
     onPressed: function(buttonCode) {
       if (buttonCode === Qt.MiddleButton) {
@@ -130,68 +145,56 @@ BarWidget {
       }
     }
 
-    BorderSurface {
-      id: pill
+    Row {
+      id: segmentRow
       anchors.centerIn: parent
-      implicitWidth: segmentRow.implicitWidth + Style.space(14)
-      implicitHeight: Math.max(segmentRow.implicitHeight + Style.space(6), Style.space(20))
-      width: implicitWidth
-      height: implicitHeight
-      radius: Style.cornerRadius > 0 ? height / 2 : 0
-      color: Style.normalFillFor(root.foreground, Color.accent)
-      borderSpec: Border.controlSpec("normal", root.foreground, Color.accent)
+      spacing: Style.spacing.sm
 
-      Row {
-        id: segmentRow
-        anchors.centerIn: parent
-        spacing: Style.space(5)
+      Text {
+        visible: !root.svc || root.svc.barSegments.length === 0
+        textFormat: Text.PlainText
+        text: root.svc && root.svc.hasReport ? "—" : "…"
+        color: Color.muted
+        font.family: Style.font.family
+        font.pixelSize: Style.font.caption
+      }
 
-        Text {
-          visible: !root.svc || root.svc.barSegments.length === 0
-          textFormat: Text.PlainText
-          text: root.svc && root.svc.hasReport ? "—" : "…"
-          color: Color.muted
-          font.family: Style.font.family
-          font.pixelSize: Style.font.caption
-        }
+      Repeater {
+        model: root.svc ? root.svc.barSegments : []
 
-        Repeater {
-          model: root.svc ? root.svc.barSegments : []
+        delegate: Row {
+          required property var modelData
+          required property int index
+          spacing: Style.spacing.sm
 
-          delegate: Row {
-            required property var modelData
-            required property int index
-            spacing: Style.space(5)
+          Text {
+            visible: index > 0
+            textFormat: Text.PlainText
+            text: "·"
+            color: Color.muted
+            font.family: Style.font.family
+            font.pixelSize: Style.font.caption
+          }
 
-            Text {
-              visible: index > 0
-              textFormat: Text.PlainText
-              text: "·"
-              color: Color.muted
-              font.family: Style.font.family
-              font.pixelSize: Style.font.caption
-            }
+          // Some Nerd glyphs advance zero pixels and would paint under the
+          // digits that follow; a fixed-width box guarantees separation.
+          Text {
+            width: Style.spacing.xxl
+            horizontalAlignment: Text.AlignHCenter
+            textFormat: Text.PlainText
+            text: modelData.glyph
+            color: Model.severityColor(modelData.percent, root.palette, modelData.error)
+            font.family: Style.font.family
+            font.pixelSize: Style.font.caption
+          }
 
-            // Some Nerd glyphs advance zero pixels and would paint under the
-            // digits that follow; a fixed-width box guarantees separation.
-            Text {
-              width: Style.space(12)
-              horizontalAlignment: Text.AlignHCenter
-              textFormat: Text.PlainText
-              text: modelData.glyph
-              color: Model.severityColor(modelData.percent, root.palette, modelData.error)
-              font.family: Style.font.family
-              font.pixelSize: Style.font.caption
-            }
-
-            Text {
-              visible: String(modelData.value || "") !== ""
-              textFormat: Text.PlainText
-              text: modelData.value
-              color: Model.severityColor(modelData.percent, root.palette, modelData.error)
-              font.family: Style.font.family
-              font.pixelSize: Style.font.caption
-            }
+          Text {
+            visible: String(modelData.value || "") !== ""
+            textFormat: Text.PlainText
+            text: modelData.value
+            color: Model.severityColor(modelData.percent, root.palette, modelData.error)
+            font.family: Style.font.family
+            font.pixelSize: Style.font.caption
           }
         }
       }

@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "id": "leoom.switchboard",
   "name": "Switchboard",
-  "version": "1.0.0",
+  "version": "2.0.0",
   "license": "MIT",
   "description": "A compact AI usage dashboard with safe Claude account switching and optional automatic switching.",
   "kinds": [
@@ -22,7 +22,7 @@
     "defaultSection": "right",
     "defaults": {
       "refreshIntervalSec": 300,
-      "barShows": "iconpct",
+      "barShows": "claude",
       "autoSwitch": false,
       "autoThreshold": 85,
       "alerts": false
@@ -34,20 +34,20 @@
         "label": "Refresh interval (seconds)",
         "min": 60,
         "max": 3600,
-        "step": 60,
+        "step": 30,
         "defaultValue": 300
       },
       {
         "key": "barShows",
         "type": "enum",
         "label": "Bar display",
-        "description": "Show family glyphs alone, with percentages, or with provider names and percentages.",
+        "description": "Show Claude only, all agent families, or family glyphs only.",
         "options": [
-          "icon",
-          "iconpct",
-          "full"
+          "claude",
+          "all",
+          "icon"
         ],
-        "defaultValue": "iconpct"
+        "defaultValue": "claude"
       },
       {
         "key": "autoSwitch",
