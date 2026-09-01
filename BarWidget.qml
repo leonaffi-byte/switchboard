@@ -172,9 +172,22 @@ BarWidget {
               font.pixelSize: Style.font.caption
             }
 
+            // Some Nerd glyphs advance zero pixels and would paint under the
+            // digits that follow; a fixed-width box guarantees separation.
             Text {
+              width: Style.space(12)
+              horizontalAlignment: Text.AlignHCenter
               textFormat: Text.PlainText
-              text: modelData.text
+              text: modelData.glyph
+              color: Model.severityColor(modelData.percent, root.palette, modelData.error)
+              font.family: Style.font.family
+              font.pixelSize: Style.font.caption
+            }
+
+            Text {
+              visible: String(modelData.value || "") !== ""
+              textFormat: Text.PlainText
+              text: modelData.value
               color: Model.severityColor(modelData.percent, root.palette, modelData.error)
               font.family: Style.font.family
               font.pixelSize: Style.font.caption

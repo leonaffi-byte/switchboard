@@ -404,13 +404,15 @@ Panel {
     id: tag
     property string plan: ""
 
-    width: Style.space(88)
+    width: Math.max(Style.space(40),
+      Math.min(Style.space(130), planText.implicitWidth + Style.space(10)))
     height: Style.space(20)
     radius: Style.cornerRadius
     color: Style.normalFillFor(Color.foreground, Color.accent)
     borderSpec: Border.controlSpec("normal", Color.foreground, Color.accent)
 
     Text {
+      id: planText
       anchors.fill: parent
       anchors.leftMargin: Style.space(4)
       anchors.rightMargin: Style.space(4)
@@ -458,7 +460,7 @@ Panel {
     readonly property bool failed: entry.status === "error" || String(entry.error || "") !== ""
     readonly property int primaryPercent: metrics.primary ? Number(metrics.primary.percent) : 0
 
-    height: Style.space(50)
+    height: failed ? Style.space(64) : Style.space(50)
     opacity: entry.stale === true ? 0.45 : 1
 
     MouseArea {
@@ -549,7 +551,8 @@ Panel {
       Text {
         width: parent.width
         elide: Text.ElideRight
-        maximumLineCount: 1
+        wrapMode: Text.WordWrap
+        maximumLineCount: claudeRow.failed ? 2 : 1
         textFormat: Text.PlainText
         text: Model.claudeMeterCaption(claudeRow.entry, root.nowMs)
         color: claudeRow.failed ? Color.urgent : Color.muted
@@ -573,7 +576,7 @@ Panel {
       ? Model.agentMeterCaption(agentRow.entry, root.nowMs) + "   ·   " + rowStatus
       : (failed ? rowStatus : (health || "—") + "   ·   " + rowStatus)
 
-    height: Style.space(50)
+    height: failed ? Style.space(64) : Style.space(50)
     opacity: entry.stale === true ? 0.45 : 1
 
     Column {
@@ -642,7 +645,8 @@ Panel {
       Text {
         width: parent.width
         elide: Text.ElideRight
-        maximumLineCount: 1
+        wrapMode: Text.WordWrap
+        maximumLineCount: agentRow.failed ? 2 : 1
         textFormat: Text.PlainText
         text: agentRow.captionText
         color: agentRow.failed ? Color.urgent : Color.muted

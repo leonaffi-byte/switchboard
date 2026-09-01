@@ -15,6 +15,21 @@ var FAMILY_GLYPHS = {
   zai: "󰚩"
 }
 
+// QML passes JS arrays across context boundaries as sequence wrappers, for
+// which Array.isArray can be false while length-indexing still works. Every
+// report-data gate goes through this coercion so panel views see the same
+// sections the service parsed.
+function listOf(value) {
+  if (Array.isArray(value)) return value
+  if (value && typeof value === "object" && typeof value.length === "number") {
+    var out = []
+    var count = Math.min(Number(value.length) || 0, 4096)
+    for (var i = 0; i < count; i++) out.push(value[i])
+    return out
+  }
+  return []
+}
+
 function cleanText(value, maxLength) {
   var text = value === undefined || value === null ? "" : String(value)
   text = text.replace(/[\t\r]/g, " ")
@@ -162,7 +177,7 @@ function isClaudeEntry(entry) {
 }
 
 function groupEntries(entries) {
-  var source = Array.isArray(entries) ? entries : []
+  var source = listOf(entries)
   var claude = []
   var agents = []
   for (var i = 0; i < source.length; i++) {
@@ -173,7 +188,7 @@ function groupEntries(entries) {
 }
 
 function metricSections(entry) {
-  var sections = entry && Array.isArray(entry.sections) ? entry.sections : []
+  var sections = entry ? listOf(entry.sections) : []
   var metrics = []
   for (var i = 0; i < sections.length; i++)
     if (sections[i] && sections[i].type === "metric" && finitePercent(sections[i].percent) !== null)
@@ -215,7 +230,7 @@ function shortMetricLabel(label) {
 }
 
 function firstHealthText(entry) {
-  var sections = entry && Array.isArray(entry.sections) ? entry.sections : []
+  var sections = entry ? listOf(entry.sections) : []
   for (var i = 0; i < sections.length; i++) {
     var section = sections[i]
     if (!section || section.type !== "text") continue
@@ -227,7 +242,8 @@ function firstHealthText(entry) {
     var block = sections[j]
     if (!block || block.type !== "block") continue
     var blockLabel = autoTextSafe(block.label, 80).trim()
-    var first = Array.isArray(block.body) && block.body.length > 0
+    var body = listOf(block.body)
+    var first = body.length > 0
       ? autoTextSafe(block.body[0], 120).trim() : ""
     return (blockLabel + (blockLabel !== "" && first !== "" ? " " : "") + first).trim()
   }
@@ -276,7 +292,7 @@ function isUnsavedLoginEntry(entry) {
 }
 
 function unsavedLoginEntry(entries) {
-  var source = Array.isArray(entries) ? entries : []
+  var source = listOf(entries)
   for (var i = 0; i < source.length; i++)
     if (isUnsavedLoginEntry(source[i])) return source[i]
   return null
@@ -367,7 +383,7 @@ function agentMeterCaption(entry, nowMs) {
 }
 
 function activeAccountLabel(entries) {
-  var source = Array.isArray(entries) ? entries : []
+  var source = listOf(entries)
   var active = null
   var activeCount = 0
   for (var i = 0; i < source.length; i++) {
@@ -394,7 +410,7 @@ function familyShortName(entry, family) {
 }
 
 function familyAggregates(entries) {
-  var source = Array.isArray(entries) ? entries : []
+  var source = listOf(entries)
   var byFamily = {}
   var order = []
   for (var i = 0; i < source.length; i++) {
@@ -449,17 +465,23 @@ function barShowsSetting(value) {
   return mode === "icon" || mode === "iconpct" || mode === "full" ? mode : "iconpct"
 }
 
-function barSegmentText(segment, barShows) {
+function barSegmentValue(segment, barShows) {
   var item = segment && typeof segment === "object" ? segment : {}
   var mode = barShowsSetting(barShows)
-  var glyph = item.glyph || familyGlyph(item.family)
   var percent = finitePercent(item.percent)
-  if (mode === "icon") return glyph
-  if (mode === "iconpct") return glyph + (percent === null ? "" : " " + percent + "%")
+  if (mode === "icon") return ""
+  if (mode === "iconpct") return percent === null ? "" : percent + "%"
   var shortName = autoTextSafe(item.shortName, 24).trim()
   if (shortName === "") shortName = autoTextSafe(item.family, 24).trim()
-  return glyph + (shortName === "" ? "" : " " + shortName)
-    + (percent === null ? "" : " " + percent + "%")
+  return (shortName === "" ? "" : shortName)
+    + (percent === null ? "" : (shortName === "" ? "" : " ") + percent + "%")
+}
+
+function barSegmentText(segment, barShows) {
+  var item = segment && typeof segment === "object" ? segment : {}
+  var glyph = item.glyph || familyGlyph(item.family)
+  var value = barSegmentValue(segment, barShows)
+  return glyph + (value === "" ? "" : " " + value)
 }
 
 function buildBarSegments(entries, barShows) {
@@ -493,6 +515,7 @@ function buildBarSegments(entries, barShows) {
       error: item.error,
       severity: item.error ? "critical" : severityBand(item.percent)
     }
+    segment.value = barSegmentValue(segment, mode)
     segment.text = barSegmentText(segment, mode)
     result.push(segment)
   }
@@ -525,7 +548,7 @@ function alertDecisions(entries, armedState, opts) {
   if (!enabled) return { notifications: [], armedState: nextState }
 
   var notifications = []
-  var source = Array.isArray(entries) ? entries : []
+  var source = listOf(entries)
   var levels = [
     { name: "Warn", threshold: 75 },
     { name: "Critical", threshold: 90 }
@@ -582,7 +605,7 @@ function autoSwitchDecision(entries, opts) {
   var options = opts && typeof opts === "object" ? opts : {}
   if (options.enabled !== true) return { action: "none", reason: "off" }
 
-  var source = Array.isArray(entries) ? entries : []
+  var source = listOf(entries)
   var active = null
   var activeCount = 0
   for (var i = 0; i < source.length; i++) {

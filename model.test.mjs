@@ -389,7 +389,11 @@ test('manifest and QML retain the required plugin lifecycle contracts', () => {
   assert.match(bar, /bar\.shell\.updateEntryInline\(root\.moduleName, entry\)/);
   assert.match(bar, /setting\("barShows", "iconpct"\)/);
   assert.doesNotMatch(bar, /setting\("compactBar"/);
-  assert.match(bar, /text:\s*modelData\.text/);
+  // The glyph renders in its own fixed-width box (zero-advance Nerd glyphs
+  // must never paint under the digits), with the value as a separate Text.
+  assert.match(bar, /text:\s*modelData\.glyph/);
+  assert.match(bar, /text:\s*modelData\.value/);
+  assert.doesNotMatch(bar, /text:\s*modelData\.text/);
   assert.doesNotMatch(bar, /onWheelMoved/);
 
   const service = fs.readFileSync(new URL('./Service.qml', import.meta.url), 'utf8');
