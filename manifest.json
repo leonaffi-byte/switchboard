@@ -3,6 +3,7 @@
   "id": "leoom.switchboard",
   "name": "Switchboard",
   "version": "2.0.0",
+  "author": "leonaffi-byte",
   "license": "MIT",
   "description": "A compact AI usage dashboard with safe Claude account switching and optional automatic switching.",
   "kinds": [
