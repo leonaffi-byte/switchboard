@@ -15,11 +15,16 @@ report fields this plugin renders. Install the fork binary first:
 
 ```bash
 cargo install --locked --git https://github.com/leonaffi-byte/ai-usagebar \
-  --rev 950b3665ae421e9e0426435dc97eda2f93959b8f
+  --rev 41321cc7c29bc574fcc94e92d48fec74a475998c
 ```
 
-The backend is pinned to an immutable revision (tag `v1.9.1-whkey.1`); see
+The backend is pinned to an immutable revision (tag `v1.9.1-whkey.2`); see
 [Backend provenance and audit guide](#backend-provenance-and-audit-guide).
+
+The fork also auto-enables Kimi and SuperGrok when their CLI logins exist (set
+`enabled = false` in `~/.config/ai-usagebar/config.toml` to opt out), and
+providers that merely lack an API key are hidden from the dashboard until a key
+is added on the settings page.
 
 With the unmodified upstream `ai-usagebar` the plugin still shows usage, but
 account rows are display-only (no save, switch, or rename) and the unsaved-login
@@ -140,8 +145,8 @@ the last-known compact status line remain available.
 Switchboard's install instructions pin the backend to one immutable commit so
 that what a reviewer audits is what users execute.
 
-- **Pinned revision:** `950b3665ae421e9e0426435dc97eda2f93959b8f`
-  (annotated tag `v1.9.1-whkey.1` on https://github.com/leonaffi-byte/ai-usagebar).
+- **Pinned revision:** `41321cc7c29bc574fcc94e92d48fec74a475998c`
+  (annotated tag `v1.9.1-whkey.2` on https://github.com/leonaffi-byte/ai-usagebar).
 - **Reproducible build:** that revision commits `Cargo.lock`; `--locked` makes
   `cargo install` refuse any dependency drift, so the build is fully determined
   by the revision.
