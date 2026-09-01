@@ -692,3 +692,26 @@ test('providers without a key are hidden from rows, bar, tooltip, and status', (
   assert.doesNotMatch(model.statusLine(shown), /zai/);
   assert.doesNotMatch(model.barTooltip(shown, 'claude'), /zai/);
 });
+
+test('row tooltips use full metric labels, one per line, plus health and status notes', () => {
+  const now = Date.UTC(2026, 8, 2, 10, 0, 0);
+  const inTwoDays = new Date(now + 2 * 86400000 + 20 * 3600000).toISOString();
+  const kimi = {id: 'kimi', display_name: 'Kimi', short_name: 'kmi', plan: 'Allegretto', status: 'ready', error: '', stale: false,
+    sections: [metric('Weekly quota', 28, inTwoDays), metric('Rolling window (5h)', 100)]};
+  const tip = model.entryTooltip(kimi, now);
+  assert.equal(tip.split('\n')[0], 'Kimi · Allegretto');
+  assert.match(tip, /^Weekly quota: 28% · resets 2d 20h$/m);
+  assert.match(tip, /^Rolling window \(5h\): 100%$/m);
+  assert.doesNotMatch(tip, /…|—/);
+
+  const codex = {id: 'openai', display_name: 'Codex', short_name: 'gpt', plan: '', status: 'ready', error: '', stale: true,
+    sections: [metric('Codex weekly', 60), {type: 'text', label: 'Credits balance', value: '0'}]};
+  const codexTip = model.entryTooltip(codex, now);
+  assert.match(codexTip, /^Codex weekly: 60%$/m);
+  assert.match(codexTip, /^Credits balance: 0$/m);
+  assert.match(codexTip, /cached/);
+
+  const broken = {id: 'zai', display_name: 'Z.AI', status: 'error', error: 'no API key', sections: []};
+  assert.equal(model.entryTooltip(broken, now), 'Z.AI\nerror: no API key');
+  assert.equal(model.entryTooltip(null, now), '');
+});

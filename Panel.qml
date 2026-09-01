@@ -729,9 +729,7 @@ Panel {
     readonly property bool switchable: Model.isSwitchableEntry(entry)
     readonly property bool failed: entry.status === "error" || String(entry.error || "") !== ""
     readonly property int primaryPercent: metrics.primary ? Number(metrics.primary.percent) : 0
-    readonly property string detailText: failed
-      ? Model.autoTextSafe(entry.error || "error", 300)
-      : Model.claudeMeterCaption(entry, root.nowMs)
+    readonly property string detailText: Model.entryTooltip(entry, root.nowMs)
     readonly property var renameSource: Model.renameLabel(entry)
     property bool renaming: false
     property string renameDraft: ""
@@ -903,10 +901,7 @@ Panel {
     readonly property string health: Model.firstHealthText(entry)
     readonly property bool failed: entry.status === "error" || String(entry.error || "") !== ""
     readonly property int primaryPercent: metrics.primary ? Number(metrics.primary.percent) : 0
-    readonly property string detailText: failed
-      ? Model.autoTextSafe(entry.error || "error", 300)
-      : (metrics.primary ? Model.agentMeterCaption(agentRow.entry, root.nowMs)
-        : (health || String(entry.status || "ready")))
+    readonly property string detailText: Model.entryTooltip(entry, root.nowMs)
 
     height: agentBody.implicitHeight
     opacity: entry.stale === true ? 0.45 : 1

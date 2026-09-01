@@ -450,6 +450,39 @@ function renameLabel(entry) {
   return validSaveLabel(stored) ? stored : null
 }
 
+// Hover detail for a row: every metric with its FULL label on its own line,
+// then health/text rows, then a stale/error note. The compact captions
+// truncate labels for the one-line footer; a tooltip has room and must not.
+function entryTooltip(entry, nowMs) {
+  if (!entry) return ""
+  var lines = []
+  var name = isClaudeEntry(entry) ? claudeEntryName(entry) : agentEntryName(entry)
+  var plan = autoTextSafe(entry.plan, 120).trim()
+  lines.push(plan !== "" ? name + " · " + plan : name)
+
+  var metrics = metricSections(entry)
+  for (var i = 0; i < metrics.length && lines.length < 10; i++) {
+    var label = autoTextSafe(metrics[i].label, 80).trim() || "usage"
+    var reset = relativeReset(metrics[i].reset_at, nowMs)
+    lines.push(label + ": " + metrics[i].percent + "%" + (reset ? " · " + reset : ""))
+  }
+
+  var sections = listOf(entry.sections)
+  for (var j = 0; j < sections.length && lines.length < 12; j++) {
+    var row = sections[j]
+    if (!row || row.type !== "text") continue
+    var textLabel = autoTextSafe(row.label, 80).trim()
+    var value = autoTextSafe(row.value, 120).trim()
+    if (textLabel === "" && value === "") continue
+    lines.push(textLabel !== "" && value !== "" ? textLabel + ": " + value : (textLabel || value))
+  }
+
+  var error = autoTextSafe(entry.error, 240).trim()
+  if (error !== "") lines.push("error: " + error)
+  else if (entry.stale === true) lines.push("cached — provider did not answer")
+  return lines.join("\n")
+}
+
 function autoSwitchBlurb(entries, threshold) {
   var name = activeAccountLabel(entries)
   if (name === "") name = "the active account"
