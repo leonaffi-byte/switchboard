@@ -149,22 +149,24 @@ Panel {
     contentWidth: panel.fittedContentWidth(Style.space(300))
     contentHeight: panel.fittedContentHeight(column.implicitHeight, Style.space(460))
 
-    // A blocked PanelKeyCatcher swallows Escape without emitting
-    // closeRequested, so the settings page needs its own window-scoped
-    // shortcut — it works no matter which control holds focus, including
-    // mid-edit in a key field (pending input is deliberately dropped).
-    Shortcut {
-      sequences: ["Escape"]
-      context: Qt.WindowShortcut
-      enabled: root.opened && root.settingsOpen
-      onActivated: root.closeSettings()
-    }
-
     PanelKeyCatcher {
       id: keyCatcher
       anchors.fill: parent
       blocked: root.settingsOpen
       onCloseRequested: root.settingsOpen ? root.closeSettings() : root.close()
+
+      // A blocked PanelKeyCatcher swallows Escape without emitting
+      // closeRequested, so the settings page needs its own window-scoped
+      // shortcut — it works no matter which control holds focus, including
+      // mid-edit in a key field (pending input is deliberately dropped).
+      // It must live inside an Item: KeyboardPanel's content list accepts
+      // only visual items, and a non-Item child silently breaks the panel.
+      Shortcut {
+        sequences: ["Escape"]
+        context: Qt.WindowShortcut
+        enabled: root.opened && root.settingsOpen
+        onActivated: root.closeSettings()
+      }
       onTabRequested: function(direction) { root.switchPanel(direction) }
       onTextKey: function(text) {
         if (!root.settingsOpen && (text === "r" || text === "R")
