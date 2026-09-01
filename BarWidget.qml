@@ -78,6 +78,8 @@ BarWidget {
   }
 
   // ---- Always-loaded panel lifecycle required by bar popout routing.
+  readonly property var panelItem: panelLoader.item
+  readonly property bool panelOpened: panelLoader.item ? panelLoader.item.opened === true : false
   readonly property bool opened: panelLoader.item ? panelLoader.item.opened === true : false
   function open() { if (panelLoader.item) panelLoader.item.open() }
   function close() { if (panelLoader.item) panelLoader.item.close() }

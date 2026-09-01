@@ -143,7 +143,9 @@ Panel {
     owner: root.barIdentity
     bar: root.bar
     open: root.opened
-    centerOnBar: true
+    // Anchor directly under the widget's bar item, like native panels — a
+    // centered panel reads as detached from the icon that opened it.
+    centerOnBar: false
     focusTarget: keyCatcher
     padding: Style.spacing.panelPadding
     contentWidth: panel.fittedContentWidth(Style.space(300))
@@ -281,6 +283,20 @@ Panel {
                 width: parent.width
                 textFormat: Text.PlainText
                 text: "no saved accounts"
+                color: Color.muted
+                font.family: Style.font.family
+                font.pixelSize: Style.font.caption
+              }
+
+              // One-line onboarding while there is nothing to switch between.
+              Text {
+                visible: !!root.svc && root.svc.claudeEntries.length < 2
+                width: parent.width
+                wrapMode: Text.WordWrap
+                maximumLineCount: 2
+                elide: Text.ElideRight
+                textFormat: Text.PlainText
+                text: "add another: /login as it in any Claude terminal, then Save here"
                 color: Color.muted
                 font.family: Style.font.family
                 font.pixelSize: Style.font.caption
@@ -606,32 +622,21 @@ Panel {
                 font.pixelSize: Style.font.caption
               }
 
+              // Real failures only (validation or a failed apply) — provider
+              // "no API key" errors are redundant next to a field that
+              // already says "not set", and a wall of red reads as broken.
               Text {
                 visible: text !== ""
                 width: parent.width
                 wrapMode: Text.WordWrap
+                maximumLineCount: 2
+                elide: Text.ElideRight
                 textFormat: Text.PlainText
                 text: root.settingsValidationError !== ""
                   ? root.settingsValidationError : (root.svc ? root.svc.settingsError : "")
                 color: Color.urgent
                 font.family: Style.font.family
                 font.pixelSize: Style.font.caption
-              }
-
-              Repeater {
-                model: Model.agentErrorEntries(root.svc ? root.svc.entries : [])
-
-                delegate: Text {
-                  required property var modelData
-                  width: parent.width
-                  wrapMode: Text.WordWrap
-                  textFormat: Text.PlainText
-                  text: Model.agentEntryName(modelData) + ": "
-                    + Model.autoTextSafe(modelData.error || "error", 300)
-                  color: Color.urgent
-                  font.family: Style.font.family
-                  font.pixelSize: Style.font.caption
-                }
               }
 
               Repeater {

@@ -575,6 +575,18 @@ Item {
     }
 
     function status(): string { return Model.statusLine(root.entries) }
+
+    // Opens the panel directly on the settings page (also used by review
+    // tooling — the page is otherwise reachable only by clicking the gear).
+    function settings(): string {
+      if (!root.registeredWidget || typeof root.registeredWidget.togglePanel !== "function")
+        return "unavailable"
+      var panelItem = root.registeredWidget.panelItem
+      if (!panelItem || typeof panelItem.openSettings !== "function") return "unavailable"
+      if (!root.registeredWidget.panelOpened) root.registeredWidget.togglePanel()
+      panelItem.openSettings()
+      return "ok"
+    }
   }
 
   Component.onCompleted: Qt.callLater(root.beginBinaryResolution)
