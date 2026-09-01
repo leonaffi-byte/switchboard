@@ -430,8 +430,8 @@ function autoSwitchBlurb(entries, threshold) {
   var value = Number(threshold)
   if (!isFinite(value)) value = 85
   value = Math.max(0, Math.min(100, Math.round(value)))
-  return "When " + name + " passes " + value
-    + "% (5h window), every open terminal switches to your least-used saved account."
+  return "Past " + value + "% (5h), " + name
+    + " hands every terminal to your least-used saved account."
 }
 
 function entryPrimaryPercent(entry) {

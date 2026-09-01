@@ -353,13 +353,13 @@ test('auto-switch card is an off/armed/event state machine and keeps events acro
 
 test('auto-switch blurb substitutes the live account and has a safe fallback', () => {
   assert.equal(model.autoSwitchBlurb([claude('anthropic', true, 44)], 85),
-    'When main passes 85% (5h window), every open terminal switches to your least-used saved account.');
+    'Past 85% (5h), main hands every terminal to your least-used saved account.');
   assert.equal(model.autoSwitchBlurb([], 90),
-    'When the active account passes 90% (5h window), every open terminal switches to your least-used saved account.');
+    'Past 90% (5h), the active account hands every terminal to your least-used saved account.');
   assert.equal(model.autoSwitchBlurb([
     claude('anthropic@one', true, 44), claude('anthropic@two', true, 33)
   ], 70),
-  'When the active account passes 70% (5h window), every open terminal switches to your least-used saved account.');
+  'Past 70% (5h), the active account hands every terminal to your least-used saved account.');
 });
 
 test('main-panel auto-switch events use the redesigned one-line wording', () => {
