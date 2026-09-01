@@ -287,7 +287,7 @@ test('bar modes migrate old values and keep Claude minimal by default', () => {
 
   const migration = new Map([
     ['claude', 'claude'], ['all', 'all'], ['icon', 'icon'],
-    ['iconpct', 'all'], ['full', 'all'], ['FULL', 'all'],
+    ['iconpct', 'claude'], ['full', 'all'], ['FULL', 'all'],
     ['', 'claude'], ['bad-value', 'claude'], [undefined, 'claude'], [null, 'claude']
   ]);
   for (const [input, expected] of migration)

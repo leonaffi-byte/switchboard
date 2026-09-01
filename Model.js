@@ -511,7 +511,9 @@ function familyAggregates(entries) {
 function barShowsSetting(value) {
   var mode = String(value === undefined || value === null ? "" : value).trim().toLowerCase()
   if (mode === "icon") return "icon"
-  if (mode === "all" || mode === "iconpct" || mode === "full") return "all"
+  // "iconpct" was v1's DEFAULT — those users never chose a wide bar, so they
+  // land on the new default. Only an explicit "full" choice maps to "all".
+  if (mode === "all" || mode === "full") return "all"
   return "claude"
 }
 
