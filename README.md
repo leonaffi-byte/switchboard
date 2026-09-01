@@ -14,8 +14,12 @@ account management (save, switch, rename, marker-trusted resync) and the
 report fields this plugin renders. Install the fork binary first:
 
 ```bash
-cargo install --git https://github.com/leonaffi-byte/ai-usagebar --branch whkey-options
+cargo install --locked --git https://github.com/leonaffi-byte/ai-usagebar \
+  --rev 950b3665ae421e9e0426435dc97eda2f93959b8f
 ```
+
+The backend is pinned to an immutable revision (tag `v1.9.1-whkey.1`); see
+[Backend provenance and audit guide](#backend-provenance-and-audit-guide).
 
 With the unmodified upstream `ai-usagebar` the plugin still shows usage, but
 account rows are display-only (no save, switch, or rename) and the unsaved-login
@@ -130,6 +134,84 @@ bind = CTRL ALT SHIFT, S, exec, omarchy-shell leoom.switchboard toggleAccount
 
 Busy `refresh` and `toggleAccount` IPC calls return `busy`; panel toggling and
 the last-known compact status line remain available.
+
+## Backend provenance and audit guide
+
+Switchboard's install instructions pin the backend to one immutable commit so
+that what a reviewer audits is what users execute.
+
+- **Pinned revision:** `950b3665ae421e9e0426435dc97eda2f93959b8f`
+  (annotated tag `v1.9.1-whkey.1` on https://github.com/leonaffi-byte/ai-usagebar).
+- **Reproducible build:** that revision commits `Cargo.lock`; `--locked` makes
+  `cargo install` refuse any dependency drift, so the build is fully determined
+  by the revision.
+- **Update policy:** the pin only changes through a new Switchboard commit that
+  updates the SHA above; the plugin never fetches, updates, or executes any
+  other source.
+- **Verify what you built:** `cargo install --list` shows the installed
+  revision; `git -C <clone> rev-parse HEAD` against the tag confirms it.
+
+All file references below are at the pinned revision.
+
+### Credential-file safety (`src/anthropic/flat_accounts.rs`)
+
+Saved accounts live in `~/.claude/accounts/<label>.credentials.json` with an
+`active.txt` marker; the live login is `~/.claude/.credentials.json`.
+
+- Every mutation runs under an exclusive `flock` on `.switch.lock` (line 22)
+  and validates the target before touching anything (`preflight_target`,
+  line 509; labels must match `[a-z0-9_-]{1,32}` and pass the config validator).
+- `switch_under_lock` (line 250) is journaled: it writes `.switch.journal`
+  (lines 21, 48 — hashes only, never tokens), re-saves the outgoing login into
+  its slot, installs the target, updates the marker, then removes the journal.
+- Every write is atomic (temp file + rename) with mode `0600`
+  (`atomic_write_private`, line 745); directories are created `0700`
+  (`create_private_dir`, line 734).
+- Guards refuse to overwrite an unmanaged live login or a slot whose credential
+  lineage does not match (`--force` is never passed by the plugin).
+
+### Locking and rollback
+
+- `recover_under_lock` (line 383) resolves an interrupted switch on the next
+  mutation: live matches the target → finish; live still matches the outgoing
+  slot → discard the journal; anything else → refuse and tell the user.
+- `account switch --dry-run` (`validate_switch`, line 453) runs the same
+  checks read-only.
+- Marker-trusted resync (line 360) rewrites only the marker's own slot from the
+  live file, under the same lock, and only when the live credential matches no
+  other saved account.
+
+### Stdin-only secrets (`src/tui/settings.rs`)
+
+- `settings apply` reads its JSON patch exclusively from stdin (lines 783–799)
+  and prints `{"ok":true}`; keys never appear in argv, logs, or `settings show`.
+- The config file is rewritten atomically and set to `0600` (lines 498–499).
+- On the plugin side, `Service.qml` writes the patch to the process's stdin on
+  start and immediately clears it from QML memory; key fields are
+  `password: true` and blank means unchanged.
+
+### Bounded network behavior
+
+The backend contacts only the fixed provider hosts compiled into it, and only
+for providers that are enabled: `api.anthropic.com`, `chatgpt.com` and
+`auth.openai.com`, `api.kimi.com`/`api.kimi.ai` and `auth.kimi.*`,
+`api.x.ai`, `cli-chat-proxy.grok.com` and `auth.x.ai`, `api.z.ai`,
+`api.deepseek.com`, `api.openai.com`, `api.moonshot.*`, `api.minimax*`,
+`api.novita.ai`, `api.kilo.ai`, `api.commandcode.ai`, and
+`codewhisperer.us-east-1.amazonaws.com`. Every client uses
+`same_origin_redirect_policy` (`src/vendor.rs`, line 54), so a bearer token can
+never follow a cross-host redirect. Usage caches are bound to a SHA-256
+credential fingerprint (`src/anthropic/fetch.rs`, lines 452–465) so a switch can
+never surface another account's data.
+
+### Bounded process behavior
+
+Switchboard spawns exactly two programs: `ai-usagebar` (subcommands
+`usage --json`, `account save|switch|toggle|rename`, `settings show|apply`) and
+`notify-send`. Commands are argv arrays — never shell strings — and account
+labels are validated before they reach argv. CLIProxyAPI token files, when that
+optional source is enabled, are opened read-only with `O_NOFOLLOW`
+(`src/cliproxy/mod.rs`, lines 278–283) and are never refreshed or written.
 
 ## License
 
