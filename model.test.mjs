@@ -582,8 +582,8 @@ test('manifest and QML retain the required plugin lifecycle contracts', () => {
   assert.match(service, /\["notify-send", "-a", "Switchboard", "Claude auto-switch"/);
   assert.match(service, /Model\.alertDecisions\(parsed\.entries, alertArmedState,/);
   assert.doesNotMatch(service, /--force/);
-  assert.equal((service.match(/root\.completionsPending\+\+/g) || []).length, 7);
-  assert.equal((service.match(/root\.completionsPending--/g) || []).length, 7);
+  assert.equal((service.match(/root\.completionsPending\+\+/g) || []).length, 8);
+  assert.equal((service.match(/root\.completionsPending--/g) || []).length, 8);
 
   const panel = fs.readFileSync(new URL('./Panel.qml', import.meta.url), 'utf8');
   const claudeAt = panel.indexOf('text: "CLAUDE"');
@@ -671,4 +671,13 @@ test('settings page contracts stay pinned in QML', () => {
   assert.match(panel, /inline_configured\s*===\s*true/);
   // Leaving the panel always lands back on the main page with drafts dropped.
   assert.match(panel, /scrubProviderDrafts\(\)\s*\n\s*settingsOpen = false/);
+});
+
+test('renameLabel resolves only concrete valid flat labels', () => {
+  assert.equal(model.renameLabel({id: 'anthropic@work'}), 'work');
+  assert.equal(model.renameLabel({id: 'anthropic', account_label: 'main'}), 'main');
+  assert.equal(model.renameLabel({id: 'anthropic', account_label: ''}), null);
+  assert.equal(model.renameLabel({id: 'anthropic@Bad Label'}), null);
+  assert.equal(model.renameLabel({id: 'openai'}), null);
+  assert.equal(model.renameLabel(null), null);
 });

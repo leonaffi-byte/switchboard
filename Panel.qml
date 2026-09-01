@@ -732,6 +732,9 @@ Panel {
     readonly property string detailText: failed
       ? Model.autoTextSafe(entry.error || "error", 300)
       : Model.claudeMeterCaption(entry, root.nowMs)
+    readonly property var renameSource: Model.renameLabel(entry)
+    property bool renaming: false
+    property string renameDraft: ""
 
     height: claudeBody.implicitHeight
     opacity: entry.stale === true ? 0.45 : 1
@@ -742,7 +745,8 @@ Panel {
       horizontalPadding: 0
       verticalPadding: 0
       tooltipText: claudeRow.detailText
-      enabled: !claudeRow.switchable || (!!root.svc && !root.svc.busy)
+      enabled: !claudeRow.renaming
+        && (!claudeRow.switchable || (!!root.svc && !root.svc.busy))
       onClicked: if (claudeRow.switchable && root.svc) root.svc.switchEntry(claudeRow.entry)
     }
 
@@ -785,8 +789,9 @@ Panel {
         }
 
         Text {
+          visible: !claudeRow.renaming
           width: Math.max(0, claudeLine.width - Style.spacing.huge * 2
-            - claudePercent.width - claudeLine.spacing * 3)
+            - claudePercent.width - renameControls.width - claudeLine.spacing * 4)
           anchors.verticalCenter: parent.verticalCenter
           elide: Text.ElideRight
           textFormat: Text.PlainText
@@ -795,6 +800,64 @@ Panel {
           opacity: claudeRow.active ? 1 : 0.82
           font.family: Style.font.family
           font.pixelSize: Style.font.bodySmall
+        }
+
+        TextField {
+          visible: claudeRow.renaming
+          width: Math.max(0, claudeLine.width - Style.spacing.huge * 2
+            - claudePercent.width - renameControls.width - claudeLine.spacing * 4)
+          anchors.verticalCenter: parent.verticalCenter
+          maximumLength: 32
+          selectByMouse: true
+          verticalPadding: Style.spacing.labelGap
+          text: claudeRow.renameDraft
+          onTextEdited: claudeRow.renameDraft = text
+          Keys.onEscapePressed: claudeRow.renaming = false
+        }
+
+        Row {
+          id: renameControls
+          anchors.verticalCenter: parent.verticalCenter
+          spacing: Style.spacing.xs
+          visible: claudeRow.renameSource !== null
+
+          Button {
+            visible: !claudeRow.renaming
+            text: "\u270e"
+            fontSize: Style.font.caption
+            horizontalPadding: Style.spacing.xs
+            verticalPadding: Style.spacing.hairline
+            tooltipText: "rename"
+            enabled: !!root.svc && !root.svc.busy
+            onClicked: {
+              claudeRow.renameDraft = claudeRow.renameSource
+              claudeRow.renaming = true
+            }
+          }
+
+          Button {
+            visible: claudeRow.renaming
+            text: "\u2713"
+            fontSize: Style.font.caption
+            horizontalPadding: Style.spacing.xs
+            verticalPadding: Style.spacing.hairline
+            enabled: !!root.svc && !root.svc.busy
+              && Model.validSaveLabel(claudeRow.renameDraft)
+              && claudeRow.renameDraft !== claudeRow.renameSource
+            onClicked: {
+              if (root.svc.renameAccount(claudeRow.renameSource, claudeRow.renameDraft))
+                claudeRow.renaming = false
+            }
+          }
+
+          Button {
+            visible: claudeRow.renaming
+            text: "\u2715"
+            fontSize: Style.font.caption
+            horizontalPadding: Style.spacing.xs
+            verticalPadding: Style.spacing.hairline
+            onClicked: claudeRow.renaming = false
+          }
         }
 
         Text {

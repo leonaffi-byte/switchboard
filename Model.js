@@ -426,6 +426,19 @@ function activeAccountLabel(entries) {
   return label !== "" ? label : "default"
 }
 
+// The concrete flat label a row can rename: named rows carry it in the id,
+// the live/default row in account_label. Null when no flat slot backs the row.
+function renameLabel(entry) {
+  if (!entry || !isClaudeEntry(entry)) return null
+  var id = String(entry.id || "")
+  if (id.indexOf("anthropic@") === 0) {
+    var label = id.slice("anthropic@".length)
+    return validSaveLabel(label) ? label : null
+  }
+  var stored = cleanText(entry.account_label, 64).trim()
+  return validSaveLabel(stored) ? stored : null
+}
+
 function autoSwitchBlurb(entries, threshold) {
   var name = activeAccountLabel(entries)
   if (name === "") name = "the active account"

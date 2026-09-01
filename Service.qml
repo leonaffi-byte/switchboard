@@ -53,6 +53,8 @@ Item {
   property string switchStdout: ""
   property string switchStderr: ""
   property string saveStdout: ""
+  property string renameStdout: ""
+  property string renameStderr: ""
   property string saveStderr: ""
   property string notifyStdout: ""
   property string notifyStderr: ""
@@ -79,7 +81,8 @@ Item {
   readonly property bool refreshing: usageProcess.running
   readonly property bool settingsLoading: settingsLoadQueued || settingsShowProcess.running
   readonly property bool busy: probeProcess.running || usageProcess.running
-    || switchProcess.running || saveProcess.running || notifyProcess.running
+    || switchProcess.running || saveProcess.running || renameProcess.running
+    || notifyProcess.running
     || settingsShowProcess.running || settingsApplyProcess.running
     || completionsPending > 0
   readonly property bool anyStale: {
@@ -426,6 +429,26 @@ Item {
     statusError = failureMessage(exitCode, saveStderr, "account save failed")
   }
 
+  function renameAccount(oldLabel, newLabel) {
+    if (!Model.validSaveLabel(oldLabel) || !Model.validSaveLabel(newLabel)) return false
+    if (String(oldLabel) === String(newLabel) || root.busy || resolvedBinary === "") return false
+    statusError = ""
+    renameStdout = ""
+    renameStderr = ""
+    renameProcess.command = ["/usr/bin/env", resolvedBinary,
+      "account", "rename", String(oldLabel), String(newLabel)]
+    renameProcess.running = true
+    return true
+  }
+
+  function finishRename(exitCode) {
+    if (Number(exitCode) === 0) {
+      refreshQueued = true
+      return
+    }
+    statusError = failureMessage(exitCode, renameStderr, "account rename failed")
+  }
+
   // --------------------------------------------------------------- cadence
   Timer {
     interval: Math.max(60, root.refreshIntervalSec) * 1000
@@ -495,6 +518,22 @@ Item {
       Qt.callLater(function() {
         root.completionsPending--
         root.finishSave(exitCode)
+        root.drainWorkQueues()
+      })
+    }
+  }
+
+  Process {
+    id: renameProcess
+    running: false
+    command: ["/usr/bin/env", "ai-usagebar", "account", "rename", "old", "new"]
+    stdout: StdioCollector { waitForEnd: true; onStreamFinished: root.renameStdout = text }
+    stderr: StdioCollector { waitForEnd: true; onStreamFinished: root.renameStderr = text }
+    onExited: function(exitCode) {
+      root.completionsPending++
+      Qt.callLater(function() {
+        root.completionsPending--
+        root.finishRename(exitCode)
         root.drainWorkQueues()
       })
     }
