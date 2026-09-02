@@ -3,6 +3,7 @@
 
 var MAX_ENTRIES = 64
 var MAX_SECTIONS = 96
+var WRAPPER_SCRIPT = "deadline=$1; cap=$2; shift 2\n# exec makes timeout the process the shell manages: a SIGTERM from component destruction\n# lands on timeout, which (without --foreground) signals its whole process group, and the\n# deadline escalates to SIGKILL after 5s. Both streams are capped at the producer boundary;\n# stdout reads cap+1 bytes so the consumer can prove overflow by byte length alone.\nexec timeout --kill-after=5 \"$deadline\" \"$@\" > >(head -c \"$((cap + 1))\") 2> >(head -c 65536 >&2)\n"
 var FALLBACK_FAMILY_GLYPH = "󰚩"
 var FAMILY_GLYPHS = {
   anthropic: "󰛄",
@@ -13,6 +14,40 @@ var FAMILY_GLYPHS = {
   openrouter: "󱙺",
   deepseek: "󰧑",
   zai: "󰚩"
+}
+
+// Keep all command data in argv. The fixed shell wrapper refers only to its
+// positional parameters, so paths, labels, and subcommand arguments are never
+// interpreted as shell source.
+// The producer cap is in BYTES; QML strings measure UTF-16 units. Count UTF-8
+// bytes so a truncated non-ASCII payload can never be mistaken for a complete one.
+function utf8ByteLength(text) {
+  var value = text === undefined || text === null ? "" : String(text)
+  try {
+    return unescape(encodeURIComponent(value)).length
+  } catch (error) {
+    return value.length * 3
+  }
+}
+
+function backendCommand(binary, args, deadlineSec, stdoutCapBytes) {
+  if (typeof deadlineSec !== "number" || !isFinite(deadlineSec)
+      || Math.floor(deadlineSec) !== deadlineSec || deadlineSec < 1 || deadlineSec > 600)
+    return null
+  if (typeof stdoutCapBytes !== "number" || !isFinite(stdoutCapBytes)
+      || Math.floor(stdoutCapBytes) !== stdoutCapBytes
+      || stdoutCapBytes < 4096 || stdoutCapBytes > 4 * 1024 * 1024)
+    return null
+  if (typeof binary !== "string" || binary.length === 0 || !Array.isArray(args))
+    return null
+
+  var command = ["/usr/bin/env", "bash", "-c", WRAPPER_SCRIPT,
+    "switchboard-backend", String(deadlineSec), String(stdoutCapBytes), binary]
+  for (var i = 0; i < args.length; i++) {
+    if (typeof args[i] !== "string") return null
+    command.push(args[i])
+  }
+  return command
 }
 
 // QML passes JS arrays across context boundaries as sequence wrappers, for

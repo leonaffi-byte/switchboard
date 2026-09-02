@@ -211,12 +211,18 @@ never surface another account's data.
 
 ### Bounded process behavior
 
-Switchboard spawns exactly two programs: `ai-usagebar` (subcommands
-`usage --json`, `account save|switch|toggle|rename`, `settings show|apply`) and
-`notify-send`. Commands are argv arrays — never shell strings — and account
-labels are validated before they reach argv. CLIProxyAPI token files, when that
-optional source is enabled, are opened read-only with `O_NOFOLLOW`
-(`src/cliproxy/mod.rs`, lines 278–283) and are never refreshed or written.
+Every backend, executable-probe, and notification process runs through one
+fixed positional-argument wrapper. Total deadlines are 90 seconds for usage,
+30 seconds for account operations, 15/20 seconds for settings show/apply, 5
+seconds for probes, and 10 seconds for notifications. Producer-side stdout
+caps are respectively 1 MiB, 64 KiB, 256/64 KiB, 4 KiB, and 4 KiB; stderr is
+always capped at 64 KiB. `timeout` owns the child process group, escalates to
+SIGKILL after five seconds, and the service stops every process and drops all
+queued work when destroyed. Output is parsed only after a complete,
+non-truncated result. Command data remains argv-only, and account labels are
+validated before reaching it. CLIProxyAPI token files, when that optional
+source is enabled, are opened read-only with `O_NOFOLLOW` (`src/cliproxy/mod.rs`,
+lines 278–283) and are never refreshed or written.
 
 ## License
 

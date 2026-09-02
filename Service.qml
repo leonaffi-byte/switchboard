@@ -151,7 +151,7 @@ Item {
       probingCandidate = candidate
       probeStdout = ""
       probeStderr = ""
-      probeProcess.command = ["/usr/bin/test", "-x", candidate]
+      probeProcess.command = Model.backendCommand("/usr/bin/test", ["-x", candidate], 5, 4096)
       probeProcess.running = true
       return
     }
@@ -173,7 +173,7 @@ Item {
     refreshQueued = false
     usageStdout = ""
     usageStderr = ""
-    usageProcess.command = ["/usr/bin/env", resolvedBinary, "usage", "--json"]
+    usageProcess.command = Model.backendCommand(resolvedBinary, ["usage", "--json"], 90, 1048576)
     usageProcess.running = true
     return true
   }
@@ -198,6 +198,13 @@ Item {
   }
 
   function finishRefresh(exitCode) {
+    var boundedError = boundedCompletionError(exitCode, usageStdout,
+      "usage", 90, 1048576)
+    if (boundedError !== "") {
+      statusError = boundedError
+      return
+    }
+
     // Aggregate exit status does not determine success: usage --json can
     // return a complete all-errors report with exit 1.
     var parsed = Model.parseReport(usageStdout)
@@ -244,8 +251,8 @@ Item {
     switchStderr = ""
     switchMode = automatic === true ? "auto" : "manual"
     switchContext = context || null
-    switchProcess.command = ["/usr/bin/env", resolvedBinary,
-      "account", "switch", String(label), "--cli"]
+    switchProcess.command = Model.backendCommand(resolvedBinary,
+      ["account", "switch", String(label), "--cli"], 30, 65536)
     switchProcess.running = true
     return true
   }
@@ -263,7 +270,8 @@ Item {
     switchStderr = ""
     switchMode = "toggle"
     switchContext = null
-    switchProcess.command = ["/usr/bin/env", resolvedBinary, "account", "toggle"]
+    switchProcess.command = Model.backendCommand(resolvedBinary,
+      ["account", "toggle"], 30, 65536)
     switchProcess.running = true
     return true
   }
@@ -273,7 +281,8 @@ Item {
     statusError = ""
     saveStdout = ""
     saveStderr = ""
-    saveProcess.command = ["/usr/bin/env", resolvedBinary, "account", "save", String(label)]
+    saveProcess.command = Model.backendCommand(resolvedBinary,
+      ["account", "save", String(label)], 30, 65536)
     saveProcess.running = true
     return true
   }
@@ -295,13 +304,23 @@ Item {
     settingsLoadQueued = false
     settingsShowStdout = ""
     settingsShowStderr = ""
-    settingsShowProcess.command = ["/usr/bin/env", resolvedBinary, "settings", "show"]
+    settingsShowProcess.command = Model.backendCommand(resolvedBinary,
+      ["settings", "show"], 15, 262144)
     settingsShowProcess.running = true
     return true
   }
 
   function finishSettingsShow(exitCode) {
     settingsLoaded = true
+    var boundedError = boundedCompletionError(exitCode, settingsShowStdout,
+      "settings show", 15, 262144)
+    if (boundedError !== "") {
+      settingsSnapshot = ({
+        ok: false, error: "", primary: "", primary_choices: [], keys: []
+      })
+      settingsError = boundedError
+      return
+    }
     if (Number(exitCode) !== 0) {
       settingsSnapshot = ({
         ok: false, error: "", primary: "", primary_choices: [], keys: []
@@ -328,12 +347,19 @@ Item {
     settingsApplyStdout = ""
     settingsApplyStderr = ""
     settingsApplyPayload = String(payload)
-    settingsApplyProcess.command = ["/usr/bin/env", resolvedBinary, "settings", "apply"]
+    settingsApplyProcess.command = Model.backendCommand(resolvedBinary,
+      ["settings", "apply"], 20, 65536)
     settingsApplyProcess.running = true
     return true
   }
 
   function finishSettingsApply(exitCode) {
+    var boundedError = boundedCompletionError(exitCode, settingsApplyStdout,
+      "settings apply", 20, 65536)
+    if (boundedError !== "") {
+      settingsError = boundedError
+      return
+    }
     if (!Model.settingsApplySucceeded(exitCode, settingsApplyStdout)) {
       settingsError = failureMessage(exitCode, settingsApplyStderr,
         "The settings command did not confirm the save.")
@@ -354,6 +380,15 @@ Item {
     }
     var detail = Model.stderrLine(stderrText)
     return detail === "" ? fallback : detail
+  }
+
+  function boundedCompletionError(exitCode, stdoutText, what, deadlineSec, capBytes) {
+    var code = Number(exitCode)
+    if (code === 124 || code === 137)
+      return what + " timed out after " + deadlineSec + "s"
+    if (Model.utf8ByteLength(stdoutText) > capBytes)
+      return what + " output exceeded " + capBytes
+    return ""
   }
 
   function enqueueNotification(command, priority) {
@@ -380,7 +415,7 @@ Item {
     notificationQueue = next
     notifyStdout = ""
     notifyStderr = ""
-    notifyProcess.command = command
+    notifyProcess.command = Model.backendCommand(command[0], command.slice(1), 10, 4096)
     notifyProcess.running = true
   }
 
@@ -395,7 +430,9 @@ Item {
     var context = switchContext
     switchContext = null
 
-    if (Number(exitCode) === 0) {
+    var boundedError = boundedCompletionError(exitCode, switchStdout,
+      "account switch", 30, 65536)
+    if (boundedError === "" && Number(exitCode) === 0) {
       lastSwitchMs = Date.now()
       refreshQueued = true
       if (wasAuto && context) {
@@ -411,7 +448,8 @@ Item {
       return
     }
 
-    var message = failureMessage(exitCode, switchStderr, "account switch failed")
+    var message = boundedError !== "" ? boundedError
+      : failureMessage(exitCode, switchStderr, "account switch failed")
     statusError = message
     // Every failed switch — manual, IPC, or auto — shares the cooldown base,
     // so a refresh queued behind it cannot immediately auto-switch against a
@@ -423,11 +461,14 @@ Item {
   }
 
   function finishSave(exitCode) {
-    if (Number(exitCode) === 0) {
+    var boundedError = boundedCompletionError(exitCode, saveStdout,
+      "account save", 30, 65536)
+    if (boundedError === "" && Number(exitCode) === 0) {
       refreshQueued = true
       return
     }
-    statusError = failureMessage(exitCode, saveStderr, "account save failed")
+    statusError = boundedError !== "" ? boundedError
+      : failureMessage(exitCode, saveStderr, "account save failed")
   }
 
   function renameAccount(oldLabel, newLabel) {
@@ -436,18 +477,21 @@ Item {
     statusError = ""
     renameStdout = ""
     renameStderr = ""
-    renameProcess.command = ["/usr/bin/env", resolvedBinary,
-      "account", "rename", String(oldLabel), String(newLabel)]
+    renameProcess.command = Model.backendCommand(resolvedBinary,
+      ["account", "rename", String(oldLabel), String(newLabel)], 30, 65536)
     renameProcess.running = true
     return true
   }
 
   function finishRename(exitCode) {
-    if (Number(exitCode) === 0) {
+    var boundedError = boundedCompletionError(exitCode, renameStdout,
+      "account rename", 30, 65536)
+    if (boundedError === "" && Number(exitCode) === 0) {
       refreshQueued = true
       return
     }
-    statusError = failureMessage(exitCode, renameStderr, "account rename failed")
+    statusError = boundedError !== "" ? boundedError
+      : failureMessage(exitCode, renameStderr, "account rename failed")
   }
 
   // --------------------------------------------------------------- cadence
@@ -462,14 +506,18 @@ Item {
   Process {
     id: probeProcess
     running: false
-    command: ["/usr/bin/test", "-x", "/"]
+    command: []
     stdout: StdioCollector { waitForEnd: true; onStreamFinished: root.probeStdout = text }
     stderr: StdioCollector { waitForEnd: true; onStreamFinished: root.probeStderr = text }
     onExited: function(exitCode) {
       root.completionsPending++
       Qt.callLater(function() {
         root.completionsPending--
-        if (Number(exitCode) === 0) root.acceptBinary(root.probingCandidate)
+        var boundedError = root.boundedCompletionError(exitCode, root.probeStdout,
+          "binary probe", 5, 4096)
+        if (boundedError !== "") root.statusError = boundedError
+        if (boundedError === "" && Number(exitCode) === 0)
+          root.acceptBinary(root.probingCandidate)
         else root.probeNextCandidate()
         root.drainWorkQueues()
       })
@@ -479,7 +527,7 @@ Item {
   Process {
     id: usageProcess
     running: false
-    command: ["/usr/bin/env", "ai-usagebar", "usage", "--json"]
+    command: []
     stdout: StdioCollector { waitForEnd: true; onStreamFinished: root.usageStdout = text }
     stderr: StdioCollector { waitForEnd: true; onStreamFinished: root.usageStderr = text }
     onExited: function(exitCode) {
@@ -495,7 +543,7 @@ Item {
   Process {
     id: switchProcess
     running: false
-    command: ["/usr/bin/env", "ai-usagebar", "account", "toggle"]
+    command: []
     stdout: StdioCollector { waitForEnd: true; onStreamFinished: root.switchStdout = text }
     stderr: StdioCollector { waitForEnd: true; onStreamFinished: root.switchStderr = text }
     onExited: function(exitCode) {
@@ -511,7 +559,7 @@ Item {
   Process {
     id: saveProcess
     running: false
-    command: ["/usr/bin/env", "ai-usagebar", "account", "save", "placeholder"]
+    command: []
     stdout: StdioCollector { waitForEnd: true; onStreamFinished: root.saveStdout = text }
     stderr: StdioCollector { waitForEnd: true; onStreamFinished: root.saveStderr = text }
     onExited: function(exitCode) {
@@ -527,7 +575,7 @@ Item {
   Process {
     id: renameProcess
     running: false
-    command: ["/usr/bin/env", "ai-usagebar", "account", "rename", "old", "new"]
+    command: []
     stdout: StdioCollector { waitForEnd: true; onStreamFinished: root.renameStdout = text }
     stderr: StdioCollector { waitForEnd: true; onStreamFinished: root.renameStderr = text }
     onExited: function(exitCode) {
@@ -543,13 +591,16 @@ Item {
   Process {
     id: notifyProcess
     running: false
-    command: ["notify-send", "-a", "Switchboard", "Claude auto-switch", "complete"]
+    command: []
     stdout: StdioCollector { waitForEnd: true; onStreamFinished: root.notifyStdout = text }
     stderr: StdioCollector { waitForEnd: true; onStreamFinished: root.notifyStderr = text }
     onExited: function(exitCode) {
       root.completionsPending++
       Qt.callLater(function() {
         root.completionsPending--
+        var boundedError = root.boundedCompletionError(exitCode, root.notifyStdout,
+          "notification", 10, 4096)
+        if (boundedError !== "") root.statusError = boundedError
         root.drainWorkQueues()
       })
     }
@@ -558,7 +609,7 @@ Item {
   Process {
     id: settingsShowProcess
     running: false
-    command: ["/usr/bin/env", "ai-usagebar", "settings", "show"]
+    command: []
     stdout: StdioCollector { waitForEnd: true; onStreamFinished: root.settingsShowStdout = text }
     stderr: StdioCollector { waitForEnd: true; onStreamFinished: root.settingsShowStderr = text }
     onExited: function(exitCode) {
@@ -574,7 +625,7 @@ Item {
   Process {
     id: settingsApplyProcess
     running: false
-    command: ["/usr/bin/env", "ai-usagebar", "settings", "apply"]
+    command: []
     stdinEnabled: true
     onStarted: {
       write(root.settingsApplyPayload + "\n")
@@ -630,4 +681,19 @@ Item {
   }
 
   Component.onCompleted: Qt.callLater(root.beginBinaryResolution)
+  Component.onDestruction: {
+    probeProcess.running = false
+    usageProcess.running = false
+    switchProcess.running = false
+    saveProcess.running = false
+    renameProcess.running = false
+    notifyProcess.running = false
+    settingsShowProcess.running = false
+    settingsApplyProcess.running = false
+    completionsPending = 0
+    refreshQueued = false
+    settingsLoadQueued = false
+    notificationQueue = []
+    settingsApplyPayload = ""
+  }
 }

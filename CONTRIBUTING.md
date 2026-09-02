@@ -1,4 +1,4 @@
-# Notes for coding agents
+# Contributing
 
 - Run `node --test .` before finishing any change; all tests must pass.
 - Validate the manifest with `omarchy plugin validate .` after editing it.

@@ -522,6 +522,34 @@ test('binary candidates preserve override, local install, and PATH order', () =>
     ['/opt/fork', '/home/test/.local/bin/ai-usagebar', 'ai-usagebar']);
 });
 
+test('backend commands use one fixed positional wrapper and validate their bounds', () => {
+  const args = ['usage', '--profile', 'team name', '${HOME}', '-x'];
+  const command = Array.from(model.backendCommand('/opt/switch board/bin', args, 90, 1048576));
+  assert.deepEqual(command.slice(0, 3), ['/usr/bin/env', 'bash', '-c']);
+  assert.equal(typeof model.WRAPPER_SCRIPT, 'string');
+  assert.equal(command[3], model.WRAPPER_SCRIPT);
+  assert.equal(command[4], 'switchboard-backend');
+  assert.deepEqual(command.slice(5, 8), ['90', '1048576', '/opt/switch board/bin']);
+  assert.deepEqual(command.slice(8), args);
+
+  const script = command[3];
+  assert.match(script, /deadline=\$1; cap=\$2; shift 2/);
+  assert.match(script, /timeout --kill-after=5/);
+  assert.match(script, /head -c 65536/);
+  assert.match(script, /head -c "\$\(\(cap \+ 1\)\)"/);
+  assert.match(script, /exec timeout --kill-after=5/);
+  assert.doesNotMatch(script, /\/opt\/switch board|team name|\$\{HOME\}|--profile/);
+
+  for (const deadline of [0, 601, 1.5, NaN, Infinity, '90'])
+    assert.equal(model.backendCommand('/bin/tool', [], deadline, 4096), null);
+  for (const cap of [4095, 4194305, 4096.5, NaN, Infinity, '4096'])
+    assert.equal(model.backendCommand('/bin/tool', [], 1, cap), null);
+  for (const binary of ['', null, 42])
+    assert.equal(model.backendCommand(binary, [], 1, 4096), null);
+  assert.equal(model.backendCommand('/bin/tool', null, 1, 4096), null);
+  assert.equal(model.backendCommand('/bin/tool', ['ok', 2], 1, 4096), null);
+});
+
 test('manifest and QML retain the required plugin lifecycle contracts', () => {
   const manifest = JSON.parse(fs.readFileSync(new URL('./manifest.json', import.meta.url), 'utf8'));
   assert.equal(manifest.schemaVersion, 1);
@@ -569,12 +597,12 @@ test('manifest and QML retain the required plugin lifecycle contracts', () => {
 
   const service = fs.readFileSync(new URL('./Service.qml', import.meta.url), 'utf8');
   assert.match(service, /target:\s*"leoom\.switchboard"/);
-  assert.match(service, /\["\/usr\/bin\/env", resolvedBinary, "usage", "--json"\]/);
-  assert.match(service, /"account", "switch", String\(label\), "--cli"/);
-  assert.match(service, /"account", "save", String\(label\)/);
-  assert.match(service, /"account", "toggle"/);
-  assert.match(service, /\["\/usr\/bin\/env", resolvedBinary, "settings", "show"\]/);
-  assert.match(service, /\["\/usr\/bin\/env", resolvedBinary, "settings", "apply"\]/);
+  assert.match(service, /Model\.backendCommand\(resolvedBinary, \["usage", "--json"\], 90, 1048576\)/);
+  assert.match(service, /Model\.backendCommand\(resolvedBinary,\s*\["account", "switch", String\(label\), "--cli"\], 30, 65536\)/);
+  assert.match(service, /Model\.backendCommand\(resolvedBinary,\s*\["account", "save", String\(label\)\], 30, 65536\)/);
+  assert.match(service, /Model\.backendCommand\(resolvedBinary,\s*\["account", "toggle"\], 30, 65536\)/);
+  assert.match(service, /Model\.backendCommand\(resolvedBinary,\s*\["settings", "show"\], 15, 262144\)/);
+  assert.match(service, /Model\.backendCommand\(resolvedBinary,\s*\["settings", "apply"\], 20, 65536\)/);
   assert.match(service, /stdinEnabled:\s*true/);
   assert.match(service, /write\(root\.settingsApplyPayload \+ "\\n"\)[\s\S]*?settingsApplyPayload = ""/);
   assert.match(service, /Model\.settingsApplySucceeded\(exitCode, settingsApplyStdout\)/);
@@ -659,6 +687,45 @@ test('service contracts: cooldown base on every failed switch, no dead consumed 
   assert.ok(finishRefresh.indexOf('Model.parseReport') < finishRefresh.indexOf('=== 127'));
 });
 
+test('every service process is bounded and stopped during destruction', () => {
+  const service = fs.readFileSync(new URL('./Service.qml', import.meta.url), 'utf8');
+  const commandProperties = service.match(/^\s*command:\s*\[\]\s*$/gm) || [];
+  assert.equal(commandProperties.length, 8);
+  assert.equal((service.match(/Process\.command\s*=\s*Model\.backendCommand\(/g) || []).length, 9);
+  assert.doesNotMatch(service, /Process\.command\s*=\s*\[/);
+  assert.doesNotMatch(service, /\["\/usr\/bin\/env",\s*resolvedBinary/);
+  assert.match(service, /Model\.backendCommand\("\/usr\/bin\/test", \["-x", candidate\], 5, 4096\)/);
+  assert.match(service, /Model\.backendCommand\(command\[0\], command\.slice\(1\), 10, 4096\)/);
+
+  const boundedHelper = service.slice(service.indexOf('function boundedCompletionError'),
+    service.indexOf('function enqueueNotification'));
+  assert.match(boundedHelper, /code === 124 \|\| code === 137/);
+  assert.match(boundedHelper, /Model\.utf8ByteLength\(stdoutText\) > capBytes/);
+  assert.match(boundedHelper, /timed out after/);
+  assert.match(boundedHelper, /output exceeded/);
+  // One guard per Process completion path, plus the helper declaration.
+  assert.equal((service.match(/boundedCompletionError\(/g) || []).length, 9);
+
+  const finishRefresh = service.slice(service.indexOf('function finishRefresh'),
+    service.indexOf('// --------------------------------------------------------------- actions'));
+  assert.ok(finishRefresh.indexOf('boundedCompletionError') < finishRefresh.indexOf('Model.parseReport'));
+  const finishShow = service.slice(service.indexOf('function finishSettingsShow'),
+    service.indexOf('function applySettingsPatch'));
+  assert.ok(finishShow.indexOf('boundedCompletionError') < finishShow.indexOf('Model.parseSettingsSnapshot'));
+  const finishApply = service.slice(service.indexOf('function finishSettingsApply'),
+    service.indexOf('function failureMessage'));
+  assert.ok(finishApply.indexOf('boundedCompletionError') < finishApply.indexOf('Model.settingsApplySucceeded'));
+
+  const destruction = service.slice(service.indexOf('Component.onDestruction'));
+  for (const id of ['probeProcess', 'usageProcess', 'switchProcess', 'saveProcess',
+    'renameProcess', 'notifyProcess', 'settingsShowProcess', 'settingsApplyProcess'])
+    assert.match(destruction, new RegExp(`${id}\\.running = false`));
+  assert.match(destruction, /completionsPending = 0/);
+  assert.match(destruction, /refreshQueued = false/);
+  assert.match(destruction, /settingsLoadQueued = false/);
+  assert.match(destruction, /notificationQueue = \[\]/);
+});
+
 test('settings page contracts stay pinned in QML', () => {
   const panel = fs.readFileSync(new URL('./Panel.qml', import.meta.url), 'utf8');
   // Esc must work from any focus state on the settings page: a window-scoped
@@ -715,4 +782,54 @@ test('row tooltips use full metric labels, one per line, plus health and status 
   const broken = {id: 'zai', display_name: 'Z.AI', status: 'error', error: 'no API key', sections: []};
   assert.equal(model.entryTooltip(broken, now), 'Z.AI\nerror: no API key');
   assert.equal(model.entryTooltip(null, now), '');
+});
+
+test('the wrapper really bounds, times out, and dies as a group (executes bash)', async () => {
+  const {spawn, execFileSync} = await import('node:child_process');
+  const run = (argv, opts = {}) => new Promise(resolve => {
+    const child = spawn(argv[0], argv.slice(1), {stdio: ['pipe', 'pipe', 'pipe']});
+    const out = []; const err = [];
+    child.stdout.on('data', chunk => out.push(chunk));
+    child.stderr.on('data', chunk => err.push(chunk));
+    if (opts.stdin !== undefined) child.stdin.end(opts.stdin); else child.stdin.end();
+    if (opts.killAfterMs) setTimeout(() => child.kill('SIGTERM'), opts.killAfterMs);
+    child.on('close', code => resolve({code, stdout: Buffer.concat(out), stderr: Buffer.concat(err)}));
+  });
+  const lingering = tag => {
+    try { return execFileSync('pgrep', ['-x', '-f', `sleep ${tag}`]).toString().trim().split('\n').filter(Boolean).length; }
+    catch (error) { return 0; }
+  };
+  const settle = ms => new Promise(resolve => setTimeout(resolve, ms));
+
+  // deadline: exit 124, and the grandchild sleep is gone with the group
+  const dead = await run(model.backendCommand('/bin/sh', ['-c', 'sleep 71 & sleep 71'], 1, 4096));
+  await settle(300);
+  assert.equal(dead.code, 124);
+  assert.equal(lingering(71), 0);
+
+  // destruction: SIGTERM to the managed process takes the whole group down
+  const killed = await run(model.backendCommand('/bin/sh', ['-c', 'sleep 72 & sleep 72'], 30, 4096), {killAfterMs: 300});
+  await settle(300);
+  assert.notEqual(killed.code, 0);
+  assert.equal(lingering(72), 0);
+
+  // cap: producer emits cap+1 bytes at most, so byte length proves overflow
+  const over = await run(model.backendCommand('/usr/bin/head', ['-c', '100000', '/dev/zero'], 5, 4096));
+  assert.equal(over.stdout.length, 4097);
+  assert.ok(model.utf8ByteLength(over.stdout.toString('latin1')) > 4096);
+
+  // stdin passes through bash → timeout → command; stderr is capped separately
+  const echoed = await run(model.backendCommand('/bin/cat', [], 5, 4096), {stdin: '{"ok":true}\n'});
+  assert.equal(echoed.code, 0);
+  assert.equal(echoed.stdout.toString(), '{"ok":true}\n');
+  const missing = await run(model.backendCommand('/nonexistent/ai-usagebar', ['usage'], 5, 4096));
+  assert.equal(missing.code, 127);
+  assert.equal(missing.stdout.length, 0);
+});
+
+test('utf8ByteLength counts bytes, not UTF-16 units', () => {
+  assert.equal(model.utf8ByteLength('abc'), 3);
+  assert.equal(model.utf8ByteLength('€€'), 6);
+  assert.equal(model.utf8ByteLength(''), 0);
+  assert.equal(model.utf8ByteLength(null), 0);
 });
