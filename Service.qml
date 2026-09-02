@@ -152,7 +152,8 @@ Item {
       probeStdout = ""
       probeStderr = ""
       probeProcess.command = Model.backendCommand("/usr/bin/test", ["-x", candidate], 5, 4096)
-      probeProcess.running = true
+      beginCompletion("probe")
+    probeProcess.running = true
       return
     }
     acceptBinary("ai-usagebar")
@@ -174,6 +175,7 @@ Item {
     usageStdout = ""
     usageStderr = ""
     usageProcess.command = Model.backendCommand(resolvedBinary, ["usage", "--json"], 90, 1048576)
+    beginCompletion("usage")
     usageProcess.running = true
     return true
   }
@@ -253,6 +255,7 @@ Item {
     switchContext = context || null
     switchProcess.command = Model.backendCommand(resolvedBinary,
       ["account", "switch", String(label), "--cli"], 30, 65536)
+    beginCompletion("switch")
     switchProcess.running = true
     return true
   }
@@ -272,6 +275,7 @@ Item {
     switchContext = null
     switchProcess.command = Model.backendCommand(resolvedBinary,
       ["account", "toggle"], 30, 65536)
+    beginCompletion("switch")
     switchProcess.running = true
     return true
   }
@@ -283,6 +287,7 @@ Item {
     saveStderr = ""
     saveProcess.command = Model.backendCommand(resolvedBinary,
       ["account", "save", String(label)], 30, 65536)
+    beginCompletion("save")
     saveProcess.running = true
     return true
   }
@@ -306,6 +311,7 @@ Item {
     settingsShowStderr = ""
     settingsShowProcess.command = Model.backendCommand(resolvedBinary,
       ["settings", "show"], 15, 262144)
+    beginCompletion("settingsShow")
     settingsShowProcess.running = true
     return true
   }
@@ -349,6 +355,7 @@ Item {
     settingsApplyPayload = String(payload)
     settingsApplyProcess.command = Model.backendCommand(resolvedBinary,
       ["settings", "apply"], 20, 65536)
+    beginCompletion("settingsApply")
     settingsApplyProcess.running = true
     return true
   }
@@ -416,6 +423,7 @@ Item {
     notifyStdout = ""
     notifyStderr = ""
     notifyProcess.command = Model.backendCommand(command[0], command.slice(1), 10, 4096)
+    beginCompletion("notify")
     notifyProcess.running = true
   }
 
@@ -479,6 +487,7 @@ Item {
     renameStderr = ""
     renameProcess.command = Model.backendCommand(resolvedBinary,
       ["account", "rename", String(oldLabel), String(newLabel)], 30, 65536)
+    beginCompletion("rename")
     renameProcess.running = true
     return true
   }
@@ -503,24 +512,96 @@ Item {
   }
 
   // -------------------------------------------------------------- processes
-  Process {
-    id: probeProcess
-    running: false
-    command: []
-    stdout: StdioCollector { waitForEnd: true; onStreamFinished: root.probeStdout = text }
-    stderr: StdioCollector { waitForEnd: true; onStreamFinished: root.probeStderr = text }
-    onExited: function(exitCode) {
-      root.completionsPending++
-      Qt.callLater(function() {
-        root.completionsPending--
+  // A backend process is complete only when it has exited AND both capped
+  // streams have ended: the managed pid (timeout) can exit while the head
+  // cappers are still flushing, so exit alone must never trigger parsing.
+  property var completionState: ({})
+
+  function beginCompletion(name) {
+    var next = {}
+    for (var key in completionState) next[key] = completionState[key]
+    next[name] = { exit: null, out: false, err: false }
+    completionState = next
+  }
+
+  function markCompletion(name, part, code) {
+    var state = completionState[name] || { exit: null, out: false, err: false }
+    if (part === "exit") state.exit = Number(code)
+    else state[part] = true
+    var next = {}
+    for (var key in completionState) next[key] = completionState[key]
+    next[name] = state
+    completionState = next
+    if (state.exit === null || !state.out || !state.err) return
+    next[name] = { exit: null, out: false, err: false }
+    completionState = next
+    var exitCode = state.exit
+    Qt.callLater(function() {
+      root.completionsPending--
+      root.completeProcess(name, exitCode)
+      root.drainWorkQueues()
+    })
+  }
+
+  function completeProcess(name, exitCode) {
+    if (name === "probe") { complete_probe(exitCode); return }
+    if (name === "usage") { complete_usage(exitCode); return }
+    if (name === "switch") { complete_switch(exitCode); return }
+    if (name === "save") { complete_save(exitCode); return }
+    if (name === "rename") { complete_rename(exitCode); return }
+    if (name === "notify") { complete_notify(exitCode); return }
+    if (name === "settingsShow") { complete_settingsShow(exitCode); return }
+    if (name === "settingsApply") { complete_settingsApply(exitCode); return }
+  }
+
+  function complete_probe(exitCode) {
         var boundedError = root.boundedCompletionError(exitCode, root.probeStdout,
           "binary probe", 5, 4096)
         if (boundedError !== "") root.statusError = boundedError
         if (boundedError === "" && Number(exitCode) === 0)
           root.acceptBinary(root.probingCandidate)
         else root.probeNextCandidate()
-        root.drainWorkQueues()
-      })
+  }
+
+  function complete_usage(exitCode) {
+        root.finishRefresh(exitCode)
+  }
+
+  function complete_switch(exitCode) {
+        root.finishSwitch(exitCode)
+  }
+
+  function complete_save(exitCode) {
+        root.finishSave(exitCode)
+  }
+
+  function complete_rename(exitCode) {
+        root.finishRename(exitCode)
+  }
+
+  function complete_notify(exitCode) {
+        var boundedError = root.boundedCompletionError(exitCode, root.notifyStdout,
+          "notification", 10, 4096)
+        if (boundedError !== "") root.statusError = boundedError
+  }
+
+  function complete_settingsShow(exitCode) {
+        root.finishSettingsShow(exitCode)
+  }
+
+  function complete_settingsApply(exitCode) {
+        root.finishSettingsApply(exitCode)
+  }
+
+  Process {
+    id: probeProcess
+    running: false
+    command: []
+    stdout: StdioCollector { waitForEnd: true; onStreamFinished: { root.probeStdout = text; root.markCompletion("probe", "out") } }
+    stderr: StdioCollector { waitForEnd: true; onStreamFinished: { root.probeStderr = text; root.markCompletion("probe", "err") } }
+    onExited: function(exitCode) {
+      root.completionsPending++
+      root.markCompletion("probe", "exit", exitCode)
     }
   }
 
@@ -528,15 +609,11 @@ Item {
     id: usageProcess
     running: false
     command: []
-    stdout: StdioCollector { waitForEnd: true; onStreamFinished: root.usageStdout = text }
-    stderr: StdioCollector { waitForEnd: true; onStreamFinished: root.usageStderr = text }
+    stdout: StdioCollector { waitForEnd: true; onStreamFinished: { root.usageStdout = text; root.markCompletion("usage", "out") } }
+    stderr: StdioCollector { waitForEnd: true; onStreamFinished: { root.usageStderr = text; root.markCompletion("usage", "err") } }
     onExited: function(exitCode) {
       root.completionsPending++
-      Qt.callLater(function() {
-        root.completionsPending--
-        root.finishRefresh(exitCode)
-        root.drainWorkQueues()
-      })
+      root.markCompletion("usage", "exit", exitCode)
     }
   }
 
@@ -544,15 +621,11 @@ Item {
     id: switchProcess
     running: false
     command: []
-    stdout: StdioCollector { waitForEnd: true; onStreamFinished: root.switchStdout = text }
-    stderr: StdioCollector { waitForEnd: true; onStreamFinished: root.switchStderr = text }
+    stdout: StdioCollector { waitForEnd: true; onStreamFinished: { root.switchStdout = text; root.markCompletion("switch", "out") } }
+    stderr: StdioCollector { waitForEnd: true; onStreamFinished: { root.switchStderr = text; root.markCompletion("switch", "err") } }
     onExited: function(exitCode) {
       root.completionsPending++
-      Qt.callLater(function() {
-        root.completionsPending--
-        root.finishSwitch(exitCode)
-        root.drainWorkQueues()
-      })
+      root.markCompletion("switch", "exit", exitCode)
     }
   }
 
@@ -560,15 +633,11 @@ Item {
     id: saveProcess
     running: false
     command: []
-    stdout: StdioCollector { waitForEnd: true; onStreamFinished: root.saveStdout = text }
-    stderr: StdioCollector { waitForEnd: true; onStreamFinished: root.saveStderr = text }
+    stdout: StdioCollector { waitForEnd: true; onStreamFinished: { root.saveStdout = text; root.markCompletion("save", "out") } }
+    stderr: StdioCollector { waitForEnd: true; onStreamFinished: { root.saveStderr = text; root.markCompletion("save", "err") } }
     onExited: function(exitCode) {
       root.completionsPending++
-      Qt.callLater(function() {
-        root.completionsPending--
-        root.finishSave(exitCode)
-        root.drainWorkQueues()
-      })
+      root.markCompletion("save", "exit", exitCode)
     }
   }
 
@@ -576,15 +645,11 @@ Item {
     id: renameProcess
     running: false
     command: []
-    stdout: StdioCollector { waitForEnd: true; onStreamFinished: root.renameStdout = text }
-    stderr: StdioCollector { waitForEnd: true; onStreamFinished: root.renameStderr = text }
+    stdout: StdioCollector { waitForEnd: true; onStreamFinished: { root.renameStdout = text; root.markCompletion("rename", "out") } }
+    stderr: StdioCollector { waitForEnd: true; onStreamFinished: { root.renameStderr = text; root.markCompletion("rename", "err") } }
     onExited: function(exitCode) {
       root.completionsPending++
-      Qt.callLater(function() {
-        root.completionsPending--
-        root.finishRename(exitCode)
-        root.drainWorkQueues()
-      })
+      root.markCompletion("rename", "exit", exitCode)
     }
   }
 
@@ -592,17 +657,11 @@ Item {
     id: notifyProcess
     running: false
     command: []
-    stdout: StdioCollector { waitForEnd: true; onStreamFinished: root.notifyStdout = text }
-    stderr: StdioCollector { waitForEnd: true; onStreamFinished: root.notifyStderr = text }
+    stdout: StdioCollector { waitForEnd: true; onStreamFinished: { root.notifyStdout = text; root.markCompletion("notify", "out") } }
+    stderr: StdioCollector { waitForEnd: true; onStreamFinished: { root.notifyStderr = text; root.markCompletion("notify", "err") } }
     onExited: function(exitCode) {
       root.completionsPending++
-      Qt.callLater(function() {
-        root.completionsPending--
-        var boundedError = root.boundedCompletionError(exitCode, root.notifyStdout,
-          "notification", 10, 4096)
-        if (boundedError !== "") root.statusError = boundedError
-        root.drainWorkQueues()
-      })
+      root.markCompletion("notify", "exit", exitCode)
     }
   }
 
@@ -610,15 +669,11 @@ Item {
     id: settingsShowProcess
     running: false
     command: []
-    stdout: StdioCollector { waitForEnd: true; onStreamFinished: root.settingsShowStdout = text }
-    stderr: StdioCollector { waitForEnd: true; onStreamFinished: root.settingsShowStderr = text }
+    stdout: StdioCollector { waitForEnd: true; onStreamFinished: { root.settingsShowStdout = text; root.markCompletion("settingsShow", "out") } }
+    stderr: StdioCollector { waitForEnd: true; onStreamFinished: { root.settingsShowStderr = text; root.markCompletion("settingsShow", "err") } }
     onExited: function(exitCode) {
       root.completionsPending++
-      Qt.callLater(function() {
-        root.completionsPending--
-        root.finishSettingsShow(exitCode)
-        root.drainWorkQueues()
-      })
+      root.markCompletion("settingsShow", "exit", exitCode)
     }
   }
 
@@ -631,15 +686,11 @@ Item {
       write(root.settingsApplyPayload + "\n")
       root.settingsApplyPayload = ""
     }
-    stdout: StdioCollector { waitForEnd: true; onStreamFinished: root.settingsApplyStdout = text }
-    stderr: StdioCollector { waitForEnd: true; onStreamFinished: root.settingsApplyStderr = text }
+    stdout: StdioCollector { waitForEnd: true; onStreamFinished: { root.settingsApplyStdout = text; root.markCompletion("settingsApply", "out") } }
+    stderr: StdioCollector { waitForEnd: true; onStreamFinished: { root.settingsApplyStderr = text; root.markCompletion("settingsApply", "err") } }
     onExited: function(exitCode) {
       root.completionsPending++
-      Qt.callLater(function() {
-        root.completionsPending--
-        root.finishSettingsApply(exitCode)
-        root.drainWorkQueues()
-      })
+      root.markCompletion("settingsApply", "exit", exitCode)
     }
   }
 

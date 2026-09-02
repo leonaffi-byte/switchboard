@@ -611,7 +611,7 @@ test('manifest and QML retain the required plugin lifecycle contracts', () => {
   assert.match(service, /Model\.alertDecisions\(parsed\.entries, alertArmedState,/);
   assert.doesNotMatch(service, /--force/);
   assert.equal((service.match(/root\.completionsPending\+\+/g) || []).length, 8);
-  assert.equal((service.match(/root\.completionsPending--/g) || []).length, 8);
+  assert.equal((service.match(/root\.completionsPending--/g) || []).length, 1);
 
   const panel = fs.readFileSync(new URL('./Panel.qml', import.meta.url), 'utf8');
   const claudeAt = panel.indexOf('text: "CLAUDE"');
@@ -832,4 +832,15 @@ test('utf8ByteLength counts bytes, not UTF-16 units', () => {
   assert.equal(model.utf8ByteLength('€€'), 6);
   assert.equal(model.utf8ByteLength(''), 0);
   assert.equal(model.utf8ByteLength(null), 0);
+});
+
+test('backend completion waits for exit and both capped streams', () => {
+  const service = fs.readFileSync(new URL('./Service.qml', import.meta.url), 'utf8');
+  // every process marks exit + stdout end + stderr end; parsing only runs from the gate
+  assert.equal((service.match(/root\.markCompletion\("[A-Za-z]+", "exit", exitCode\)/g) || []).length, 8);
+  assert.equal((service.match(/root\.markCompletion\("[A-Za-z]+", "out"\)/g) || []).length, 8);
+  assert.equal((service.match(/root\.markCompletion\("[A-Za-z]+", "err"\)/g) || []).length, 8);
+  assert.match(service, /if \(state\.exit === null \|\| !state\.out \|\| !state\.err\) return/);
+  assert.doesNotMatch(service, /onExited: function\(exitCode\) \{[^}]*Qt\.callLater/);
+  assert.equal((service.match(/beginCompletion\("[A-Za-z]+"\)/g) || []).length, 9);
 });
