@@ -20,6 +20,10 @@ Item {
   property bool alerts: false
 
   property string resolvedBinary: ""
+  property string resolvedSha256: ""
+  property bool developerBackendActive: false
+  property string developerBackend: ""
+  property string backendProblem: ""
   property var probeCandidates: []
   property int probeIndex: 0
   property string probingCandidate: ""
@@ -93,7 +97,9 @@ Item {
   readonly property string lastRefreshClock: Model.formatClock(lastRefreshMs)
   readonly property string autoStatusText: Model.autoSwitchStatus(autoSwitch, autoEvent)
   readonly property string statusText: {
-    if (binaryMissing) return "ai-usagebar not found — install the fork binary"
+    if (binaryMissing) return "pinned backend not installed — see README (Requirements)"
+    if (backendProblem !== "") return backendProblem
+    if (developerBackendActive) return "developer backend override active — unreviewed build"
     if (statusError !== "") return statusError
     if (refreshing) return "refreshing…"
     return ""
@@ -106,6 +112,11 @@ Item {
     autoSwitch = Model.booleanSetting(source.autoSwitch, false)
     autoThreshold = Model.integerSetting(source.autoThreshold, 85, 50, 95, 5)
     alerts = Model.booleanSetting(source.alerts, false)
+    var nextOverride = Model.developerBackendSetting(source.developerBackend)
+    if (nextOverride !== developerBackend) {
+      developerBackend = nextOverride
+      if (resolvedBinary !== "" || backendProblem !== "") beginBinaryResolution()
+    }
   }
 
   function registerWidget(widget) {
@@ -128,39 +139,33 @@ Item {
 
   // ---------------------------------------------------------- binary probe
   function beginBinaryResolution() {
-    probeCandidates = Model.binaryCandidates({
-      AIUSAGEBAR_BIN: Quickshell.env("AIUSAGEBAR_BIN") || "",
-      HOME: Quickshell.env("HOME") || ""
-    })
-    probeIndex = 0
-    probeNextCandidate()
-  }
-
-  function probeNextCandidate() {
-    if (root.busy) return
-    while (probeIndex < probeCandidates.length) {
-      var candidate = String(probeCandidates[probeIndex] || "")
-      probeIndex++
-      if (candidate === "") continue
-      // Only absolute candidates are meaningful inputs to test -x. A PATH
-      // override and the final bare fallback are intentionally unprobed.
-      if (candidate.charAt(0) !== "/") {
-        acceptBinary(candidate)
-        return
-      }
-      probingCandidate = candidate
-      probeStdout = ""
-      probeStderr = ""
-      probeProcess.command = Model.backendCommand("/usr/bin/test", ["-x", candidate], 5, 4096)
-      beginCompletion("probe")
-    probeProcess.running = true
+    var selection = Model.backendSelection(Quickshell.env("HOME") || "", developerBackend)
+    resolvedBinary = ""
+    resolvedSha256 = selection.sha256 || ""
+    developerBackendActive = selection.developer === true
+    backendProblem = ""
+    binaryMissing = false
+    if (selection.path === "") {
+      backendProblem = "cannot resolve the backend path (HOME unset)"
       return
     }
-    acceptBinary("ai-usagebar")
+    probingCandidate = selection.path
+    probeStdout = ""
+    probeStderr = ""
+    beginCompletion("probe")
+    // The probe runs the same verify-then-exec wrapper as every real call, so a
+    // tampered, symlinked, world-writable, or missing backend is rejected here.
+    probeProcess.command = Model.backendCommand(selection.path, ["--version"], 5, 4096,
+      selection.developer ? null : selection.sha256)
+    if (!probeProcess.command || probeProcess.command.length === 0) {
+      backendProblem = "backend command could not be built"
+      return
+    }
+    probeProcess.running = true
   }
 
   function acceptBinary(binary) {
-    resolvedBinary = String(binary || "ai-usagebar")
+    resolvedBinary = String(binary || "")
     requestAutomaticRefresh()
   }
 
@@ -174,7 +179,7 @@ Item {
     refreshQueued = false
     usageStdout = ""
     usageStderr = ""
-    usageProcess.command = Model.backendCommand(resolvedBinary, ["usage", "--json"], 90, 1048576)
+    usageProcess.command = Model.backendCommand(resolvedBinary, ["usage", "--json"], 90, 1048576, developerBackendActive ? null : resolvedSha256)
     beginCompletion("usage")
     usageProcess.running = true
     return true
@@ -253,8 +258,7 @@ Item {
     switchStderr = ""
     switchMode = automatic === true ? "auto" : "manual"
     switchContext = context || null
-    switchProcess.command = Model.backendCommand(resolvedBinary,
-      ["account", "switch", String(label), "--cli"], 30, 65536)
+    switchProcess.command = Model.backendCommand(resolvedBinary, ["account", "switch", String(label), "--cli"], 30, 65536, developerBackendActive ? null : resolvedSha256)
     beginCompletion("switch")
     switchProcess.running = true
     return true
@@ -273,8 +277,7 @@ Item {
     switchStderr = ""
     switchMode = "toggle"
     switchContext = null
-    switchProcess.command = Model.backendCommand(resolvedBinary,
-      ["account", "toggle"], 30, 65536)
+    switchProcess.command = Model.backendCommand(resolvedBinary, ["account", "toggle"], 30, 65536, developerBackendActive ? null : resolvedSha256)
     beginCompletion("switch")
     switchProcess.running = true
     return true
@@ -285,8 +288,7 @@ Item {
     statusError = ""
     saveStdout = ""
     saveStderr = ""
-    saveProcess.command = Model.backendCommand(resolvedBinary,
-      ["account", "save", String(label)], 30, 65536)
+    saveProcess.command = Model.backendCommand(resolvedBinary, ["account", "save", String(label)], 30, 65536, developerBackendActive ? null : resolvedSha256)
     beginCompletion("save")
     saveProcess.running = true
     return true
@@ -309,8 +311,7 @@ Item {
     settingsLoadQueued = false
     settingsShowStdout = ""
     settingsShowStderr = ""
-    settingsShowProcess.command = Model.backendCommand(resolvedBinary,
-      ["settings", "show"], 15, 262144)
+    settingsShowProcess.command = Model.backendCommand(resolvedBinary, ["settings", "show"], 15, 262144, developerBackendActive ? null : resolvedSha256)
     beginCompletion("settingsShow")
     settingsShowProcess.running = true
     return true
@@ -353,8 +354,7 @@ Item {
     settingsApplyStdout = ""
     settingsApplyStderr = ""
     settingsApplyPayload = String(payload)
-    settingsApplyProcess.command = Model.backendCommand(resolvedBinary,
-      ["settings", "apply"], 20, 65536)
+    settingsApplyProcess.command = Model.backendCommand(resolvedBinary, ["settings", "apply"], 20, 65536, developerBackendActive ? null : resolvedSha256)
     beginCompletion("settingsApply")
     settingsApplyProcess.running = true
     return true
@@ -422,7 +422,7 @@ Item {
     notificationQueue = next
     notifyStdout = ""
     notifyStderr = ""
-    notifyProcess.command = Model.backendCommand(command[0], command.slice(1), 10, 4096)
+    notifyProcess.command = Model.backendCommand("/usr/bin/notify-send", command.slice(1), 10, 4096, null)
     beginCompletion("notify")
     notifyProcess.running = true
   }
@@ -485,8 +485,7 @@ Item {
     statusError = ""
     renameStdout = ""
     renameStderr = ""
-    renameProcess.command = Model.backendCommand(resolvedBinary,
-      ["account", "rename", String(oldLabel), String(newLabel)], 30, 65536)
+    renameProcess.command = Model.backendCommand(resolvedBinary, ["account", "rename", String(oldLabel), String(newLabel)], 30, 65536, developerBackendActive ? null : resolvedSha256)
     beginCompletion("rename")
     renameProcess.running = true
     return true
@@ -555,13 +554,17 @@ Item {
   }
 
   function complete_probe(exitCode) {
+        var code = Number(exitCode)
         var boundedError = root.boundedCompletionError(exitCode, root.probeStdout,
-          "binary probe", 5, 4096)
-        if (boundedError !== "") root.statusError = boundedError
-        if (boundedError === "" && Number(exitCode) === 0)
-          root.acceptBinary(root.probingCandidate)
-        else root.probeNextCandidate()
+          "backend probe", 5, 4096)
+        if (boundedError !== "") { root.backendProblem = boundedError; return }
+        if (code === 0) { root.acceptBinary(root.probingCandidate); return }
+        if (code === 127) { root.binaryMissing = true; return }
+        var detail = Model.stderrLine(root.probeStderr)
+        root.backendProblem = detail !== "" ? detail
+          : "backend rejected by the integrity check (exit " + code + ")"
   }
+
 
   function complete_usage(exitCode) {
         root.finishRefresh(exitCode)

@@ -26,7 +26,8 @@ BarWidget {
       barShows: Model.barShowsSetting(setting("barShows", "claude")),
       autoSwitch: Model.booleanSetting(setting("autoSwitch", false), false),
       autoThreshold: Model.integerSetting(setting("autoThreshold", 85), 85, 50, 95, 5),
-      alerts: Model.booleanSetting(setting("alerts", false), false)
+      alerts: Model.booleanSetting(setting("alerts", false), false),
+      developerBackend: Model.developerBackendSetting(setting("developerBackend", ""))
     }
   }
 
@@ -65,6 +66,10 @@ BarWidget {
     persistWidgetSettings({
       refreshIntervalSec: Model.integerSetting(value, 300, 60, 3600, 30)
     })
+  }
+
+  function setDeveloperBackend(path) {
+    persistWidgetSettings({ developerBackend: Model.developerBackendSetting(path) })
   }
 
   function setAlerts(enabled) {

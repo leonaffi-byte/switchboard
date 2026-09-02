@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "id": "leoom.switchboard",
   "name": "Switchboard",
-  "version": "2.0.0",
+  "version": "2.1.0",
   "author": "leonaffi-byte",
   "license": "MIT",
   "description": "A compact AI usage dashboard with safe Claude account switching and optional automatic switching.",
@@ -26,7 +26,8 @@
       "barShows": "claude",
       "autoSwitch": false,
       "autoThreshold": 85,
-      "alerts": false
+      "alerts": false,
+      "developerBackend": ""
     },
     "schema": [
       {
@@ -72,6 +73,13 @@
         "label": "Threshold alerts",
         "description": "Notify once when a primary usage window crosses 75% or 90%.",
         "defaultValue": false
+      },
+      {
+        "key": "developerBackend",
+        "type": "string",
+        "label": "Developer backend override (unreviewed)",
+        "description": "Absolute path to a locally built ai-usagebar. Leave empty: the plugin then runs only the pinned, hash-verified release. An override skips the integrity check and is shown as a persistent warning.",
+        "defaultValue": ""
       }
     ]
   }

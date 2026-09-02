@@ -540,6 +540,38 @@ Panel {
                 font.family: Style.font.family
                 font.pixelSize: Style.font.caption
               }
+
+              Text {
+                width: parent.width
+                textFormat: Text.PlainText
+                text: "Developer backend override (unreviewed)"
+                color: Color.foreground
+                font.family: Style.font.family
+                font.pixelSize: Style.font.bodySmall
+              }
+
+              TextField {
+                id: developerBackendField
+                width: parent.width
+                placeholderText: "leave empty — runs only the pinned, hash-verified release"
+                text: root.svc ? root.svc.developerBackend : ""
+                selectByMouse: true
+                maximumLength: 512
+                enabled: !!root.hostWidget && (!root.svc || !root.svc.busy)
+                onEditingFinished: if (root.hostWidget) root.hostWidget.setDeveloperBackend(text)
+              }
+
+              Text {
+                width: parent.width
+                wrapMode: Text.WordWrap
+                textFormat: Text.PlainText
+                text: root.svc && root.svc.developerBackendActive
+                  ? "ACTIVE: the integrity check is skipped for this binary. Clear the field to return to the pinned release."
+                  : "Absolute path to a locally built ai-usagebar. Skips the integrity check; ownership and permission checks still apply."
+                color: root.svc && root.svc.developerBackendActive ? Color.urgent : Color.muted
+                font.family: Style.font.family
+                font.pixelSize: Style.font.caption
+              }
             }
 
             Column {

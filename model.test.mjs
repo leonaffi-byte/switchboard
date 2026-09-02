@@ -517,27 +517,22 @@ test('settings helpers preserve unknown keys and clamp manifest values', () => {
   assert.equal(model.barShowsSetting('FULL'), 'all');
 });
 
-test('binary candidates preserve override, local install, and PATH order', () => {
-  assert.deepEqual(Array.from(model.binaryCandidates({AIUSAGEBAR_BIN: '/opt/fork', HOME: '/home/test'})),
-    ['/opt/fork', '/home/test/.local/bin/ai-usagebar', 'ai-usagebar']);
-});
-
 test('backend commands use one fixed positional wrapper and validate their bounds', () => {
   const args = ['usage', '--profile', 'team name', '${HOME}', '-x'];
   const command = Array.from(model.backendCommand('/opt/switch board/bin', args, 90, 1048576));
-  assert.deepEqual(command.slice(0, 3), ['/usr/bin/env', 'bash', '-c']);
+  assert.deepEqual(command.slice(0, 2), ['/usr/bin/bash', '-c']);
   assert.equal(typeof model.WRAPPER_SCRIPT, 'string');
-  assert.equal(command[3], model.WRAPPER_SCRIPT);
-  assert.equal(command[4], 'switchboard-backend');
-  assert.deepEqual(command.slice(5, 8), ['90', '1048576', '/opt/switch board/bin']);
+  assert.equal(command[2], model.WRAPPER_SCRIPT);
+  assert.equal(command[3], 'switchboard-backend');
+  assert.deepEqual(command.slice(4, 8), ['90', '1048576', '-', '/opt/switch board/bin']);
   assert.deepEqual(command.slice(8), args);
 
-  const script = command[3];
-  assert.match(script, /deadline=\$1; cap=\$2; shift 2/);
-  assert.match(script, /timeout --kill-after=5/);
+  const script = command[2];
+  assert.match(script, /deadline=\$1; cap=\$2; expected=\$3; backend=\$4; shift 4/);
+  assert.match(script, /\$TIMEOUT" --kill-after=5/);
   assert.match(script, /head -c 65536/);
   assert.match(script, /head -c "\$\(\(cap \+ 1\)\)"/);
-  assert.match(script, /exec timeout --kill-after=5/);
+  assert.match(script, /exec "\$TIMEOUT" --kill-after=5/);
   assert.doesNotMatch(script, /\/opt\/switch board|team name|\$\{HOME\}|--profile/);
 
   for (const deadline of [0, 601, 1.5, NaN, Infinity, '90'])
@@ -555,13 +550,13 @@ test('manifest and QML retain the required plugin lifecycle contracts', () => {
   assert.equal(manifest.schemaVersion, 1);
   assert.equal(manifest.id, 'leoom.switchboard');
   assert.equal(manifest.name, 'Switchboard');
-  assert.equal(manifest.version, '2.0.0');
+  assert.equal(manifest.version, '2.1.0');
   assert.equal(manifest.license, 'MIT');
   assert.deepEqual(manifest.kinds, ['service', 'bar-widget']);
   assert.equal(manifest.keepLoaded, true);
   assert.deepEqual(manifest.entryPoints, {service: 'Service.qml', barWidget: 'BarWidget.qml'});
   assert.deepEqual(manifest.barWidget.defaults, {
-    refreshIntervalSec: 300, barShows: 'claude', autoSwitch: false, autoThreshold: 85, alerts: false
+    refreshIntervalSec: 300, barShows: 'claude', autoSwitch: false, autoThreshold: 85, alerts: false, developerBackend: ''
   });
   const refreshSchema = manifest.barWidget.schema.find(row => row.key === 'refreshIntervalSec');
   assert.equal(refreshSchema.step, 30);
@@ -597,12 +592,12 @@ test('manifest and QML retain the required plugin lifecycle contracts', () => {
 
   const service = fs.readFileSync(new URL('./Service.qml', import.meta.url), 'utf8');
   assert.match(service, /target:\s*"leoom\.switchboard"/);
-  assert.match(service, /Model\.backendCommand\(resolvedBinary, \["usage", "--json"\], 90, 1048576\)/);
-  assert.match(service, /Model\.backendCommand\(resolvedBinary,\s*\["account", "switch", String\(label\), "--cli"\], 30, 65536\)/);
-  assert.match(service, /Model\.backendCommand\(resolvedBinary,\s*\["account", "save", String\(label\)\], 30, 65536\)/);
-  assert.match(service, /Model\.backendCommand\(resolvedBinary,\s*\["account", "toggle"\], 30, 65536\)/);
-  assert.match(service, /Model\.backendCommand\(resolvedBinary,\s*\["settings", "show"\], 15, 262144\)/);
-  assert.match(service, /Model\.backendCommand\(resolvedBinary,\s*\["settings", "apply"\], 20, 65536\)/);
+  assert.match(service, /Model\.backendCommand\(resolvedBinary, \["usage", "--json"\], 90, 1048576, developerBackendActive \? null : resolvedSha256\)/);
+  assert.match(service, /Model\.backendCommand\(resolvedBinary,\s*\["account", "switch", String\(label\), "--cli"\], 30, 65536, developerBackendActive \? null : resolvedSha256\)/);
+  assert.match(service, /Model\.backendCommand\(resolvedBinary,\s*\["account", "save", String\(label\)\], 30, 65536, developerBackendActive \? null : resolvedSha256\)/);
+  assert.match(service, /Model\.backendCommand\(resolvedBinary,\s*\["account", "toggle"\], 30, 65536, developerBackendActive \? null : resolvedSha256\)/);
+  assert.match(service, /Model\.backendCommand\(resolvedBinary,\s*\["settings", "show"\], 15, 262144, developerBackendActive \? null : resolvedSha256\)/);
+  assert.match(service, /Model\.backendCommand\(resolvedBinary,\s*\["settings", "apply"\], 20, 65536, developerBackendActive \? null : resolvedSha256\)/);
   assert.match(service, /stdinEnabled:\s*true/);
   assert.match(service, /write\(root\.settingsApplyPayload \+ "\\n"\)[\s\S]*?settingsApplyPayload = ""/);
   assert.match(service, /Model\.settingsApplySucceeded\(exitCode, settingsApplyStdout\)/);
@@ -694,8 +689,8 @@ test('every service process is bounded and stopped during destruction', () => {
   assert.equal((service.match(/Process\.command\s*=\s*Model\.backendCommand\(/g) || []).length, 9);
   assert.doesNotMatch(service, /Process\.command\s*=\s*\[/);
   assert.doesNotMatch(service, /\["\/usr\/bin\/env",\s*resolvedBinary/);
-  assert.match(service, /Model\.backendCommand\("\/usr\/bin\/test", \["-x", candidate\], 5, 4096\)/);
-  assert.match(service, /Model\.backendCommand\(command\[0\], command\.slice\(1\), 10, 4096\)/);
+  assert.match(service, /Model\.backendCommand\(selection\.path, \["--version"\], 5, 4096,/);
+  assert.match(service, /Model\.backendCommand\("\/usr\/bin\/notify-send", command\.slice\(1\), 10, 4096, null\)/);
 
   const boundedHelper = service.slice(service.indexOf('function boundedCompletionError'),
     service.indexOf('function enqueueNotification'));
@@ -802,13 +797,13 @@ test('the wrapper really bounds, times out, and dies as a group (executes bash)'
   const settle = ms => new Promise(resolve => setTimeout(resolve, ms));
 
   // deadline: exit 124, and the grandchild sleep is gone with the group
-  const dead = await run(model.backendCommand('/bin/sh', ['-c', 'sleep 71 & sleep 71'], 1, 4096));
+  const dead = await run(model.backendCommand('/usr/bin/bash', ['-c', 'sleep 71 & sleep 71'], 1, 4096));
   await settle(300);
   assert.equal(dead.code, 124);
   assert.equal(lingering(71), 0);
 
   // destruction: SIGTERM to the managed process takes the whole group down
-  const killed = await run(model.backendCommand('/bin/sh', ['-c', 'sleep 72 & sleep 72'], 30, 4096), {killAfterMs: 300});
+  const killed = await run(model.backendCommand('/usr/bin/bash', ['-c', 'sleep 72 & sleep 72'], 30, 4096), {killAfterMs: 300});
   await settle(300);
   assert.notEqual(killed.code, 0);
   assert.equal(lingering(72), 0);
@@ -819,7 +814,7 @@ test('the wrapper really bounds, times out, and dies as a group (executes bash)'
   assert.ok(model.utf8ByteLength(over.stdout.toString('latin1')) > 4096);
 
   // stdin passes through bash → timeout → command; stderr is capped separately
-  const echoed = await run(model.backendCommand('/bin/cat', [], 5, 4096), {stdin: '{"ok":true}\n'});
+  const echoed = await run(model.backendCommand('/usr/bin/cat', [], 5, 4096), {stdin: '{"ok":true}\n'});
   assert.equal(echoed.code, 0);
   assert.equal(echoed.stdout.toString(), '{"ok":true}\n');
   const missing = await run(model.backendCommand('/nonexistent/ai-usagebar', ['usage'], 5, 4096));
@@ -843,4 +838,95 @@ test('backend completion waits for exit and both capped streams', () => {
   assert.match(service, /if \(state\.exit === null \|\| !state\.out \|\| !state\.err\) return/);
   assert.doesNotMatch(service, /onExited: function\(exitCode\) \{[^}]*Qt\.callLater/);
   assert.equal((service.match(/beginCompletion\("[A-Za-z]+"\)/g) || []).length, 9);
+});
+
+test('execution is bound to a verified descriptor: hash, symlink, ownership, permissions, PATH', async () => {
+  const {spawnSync} = await import('node:child_process');
+  const fsp = await import('node:fs/promises');
+  const os = await import('node:os');
+  const path = await import('node:path');
+  const crypto = await import('node:crypto');
+  const dir = await fsp.mkdtemp(path.join(os.tmpdir(), 'sb-trust-'));
+  const backend = path.join(dir, 'fake-backend');
+  const marker = path.join(dir, 'ran');
+  await fsp.writeFile(backend, `#!/usr/bin/bash\nprintf ran > "${marker}"\necho "fake $1"\n`, {mode: 0o755});
+  const sha = crypto.createHash('sha256').update(await fsp.readFile(backend)).digest('hex');
+  const run = (argv, env) => spawnSync(argv[0], argv.slice(1), {encoding: 'utf8', env: env || process.env, timeout: 20000});
+  const exists = async p => !!(await fsp.stat(p).catch(() => null));
+
+  // matching hash → runs; argv reaches the backend; stdout complete
+  let r = run(model.backendCommand(backend, ['--version'], 5, 4096, sha));
+  assert.equal(r.status, 0, r.stderr);
+  assert.equal(r.stdout.trim(), 'fake --version');
+  assert.equal(await exists(marker), true);
+  await fsp.rm(marker);
+
+  // wrong hash → 126, never executed
+  r = run(model.backendCommand(backend, ['--version'], 5, 4096, '0'.repeat(64)));
+  assert.equal(r.status, 126);
+  assert.match(r.stderr, /integrity check failed/);
+  assert.equal(await exists(marker), false);
+
+  // symlink → rejected even with a matching hash
+  const link = path.join(dir, 'link');
+  await fsp.symlink(backend, link);
+  r = run(model.backendCommand(link, ['--version'], 5, 4096, sha));
+  assert.equal(r.status, 126);
+  assert.match(r.stderr, /symlink/);
+  assert.equal(await exists(marker), false);
+
+  // group/world-writable → rejected
+  await fsp.chmod(backend, 0o775);
+  r = run(model.backendCommand(backend, ['--version'], 5, 4096, sha));
+  assert.equal(r.status, 126);
+  assert.match(r.stderr, /writable/);
+  await fsp.chmod(backend, 0o755);
+
+  // missing → 127, no output
+  r = run(model.backendCommand(path.join(dir, 'absent'), ['--version'], 5, 4096, sha));
+  assert.equal(r.status, 127);
+  assert.equal(r.stdout, '');
+
+  // relative path or bad hash never even builds a command
+  assert.equal(model.backendCommand('ai-usagebar', ['x'], 5, 4096, sha), null);
+  assert.equal(model.backendCommand(backend, ['x'], 5, 4096, 'nothex'), null);
+
+  // developer override (no hash) still enforces the file checks
+  r = run(model.backendCommand(backend, ['--version'], 5, 4096, null));
+  assert.equal(r.status, 0);
+  await fsp.rm(marker);
+
+  // PATH poisoning: evil bash/timeout/head/sha256sum/stat on PATH are ignored
+  const evil = path.join(dir, 'evil');
+  await fsp.mkdir(evil);
+  for (const tool of ['bash', 'timeout', 'head', 'sha256sum', 'stat', 'id', 'env']) {
+    await fsp.writeFile(path.join(evil, tool), `#!/usr/bin/bash\nprintf evil > "${dir}/poisoned"\nexit 99\n`, {mode: 0o755});
+  }
+  r = run(model.backendCommand(backend, ['--version'], 5, 4096, sha), {...process.env, PATH: evil});
+  assert.equal(r.status, 0, r.stderr);
+  assert.equal(await exists(path.join(dir, 'poisoned')), false);
+  assert.equal(await exists(marker), true);
+  await fsp.rm(dir, {recursive: true, force: true});
+});
+
+test('backend selection prefers the trusted pinned path and only an explicit absolute override', () => {
+  const normal = model.backendSelection('/home/u', '');
+  assert.equal(normal.path, '/home/u/.local/share/switchboard/backend/ai-usagebar');
+  assert.equal(normal.sha256, model.BACKEND_SHA256);
+  assert.equal(normal.developer, false);
+  assert.match(model.BACKEND_SHA256, /^[0-9a-f]{64}$/);
+  const dev = model.backendSelection('/home/u', '/opt/dev/ai-usagebar');
+  assert.equal(dev.path, '/opt/dev/ai-usagebar');
+  assert.equal(dev.sha256, null);
+  assert.equal(dev.developer, true);
+  assert.equal(model.backendSelection('/home/u', 'relative/path').developer, false);
+  assert.equal(model.backendSelection('', '').path, '');
+  assert.equal(model.developerBackendSetting('  /x/y  '), '/x/y');
+  assert.equal(model.developerBackendSetting('x'), '');
+  const script = model.backendCommand('/usr/bin/true', [], 5, 4096, null)[2];
+  assert.doesNotMatch(script, /\benv\b/);
+  for (const tool of ['timeout', 'bash', 'head', 'sha256sum', 'stat', 'id'])
+    assert.match(script, new RegExp('/usr/bin/' + tool));
+  assert.match(script, /exec 9< "\$backend"/);
+  assert.match(script, /\/dev\/fd\/9 "\$@"/);
 });

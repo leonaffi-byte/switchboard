@@ -3,7 +3,7 @@
 
 var MAX_ENTRIES = 64
 var MAX_SECTIONS = 96
-var WRAPPER_SCRIPT = "deadline=$1; cap=$2; shift 2\n# exec makes timeout the process the shell manages: a SIGTERM from component destruction\n# lands on timeout, which (without --foreground) signals its whole process group, and the\n# deadline escalates to SIGKILL after 5s. The cappers run INSIDE the timed command as\n# pipeline members (no process substitutions), so every byte is flushed and every pipe is\n# closed before the managed process exits — the shell never sees output after exit.\n# stdout reads cap+1 bytes so the consumer can prove overflow by byte length alone.\nexec timeout --kill-after=5 \"$deadline\" bash -c 'cap=$1; shift\n{ \"$@\" 2>&1 1>&3 | head -c 65536 >&2; exit \"${PIPESTATUS[0]}\"; } 3>&1 | head -c \"$((cap + 1))\"\nexit \"${PIPESTATUS[0]}\"\n' _ \"$cap\" \"$@\"\n"
+var WRAPPER_SCRIPT = "deadline=$1; cap=$2; expected=$3; backend=$4; shift 4\n# Trusted absolute tools only: PATH is never consulted anywhere in this wrapper.\nTIMEOUT=/usr/bin/timeout; BASH=/usr/bin/bash; STAT=/usr/bin/stat; SHA=/usr/bin/sha256sum; ID=/usr/bin/id\nfail() { printf 'switchboard: %s\\n' \"$1\" >&2; exit \"$2\"; }\ncase \"$backend\" in /*) ;; *) fail \"backend path must be absolute\" 126;; esac\n[ -L \"$backend\" ] && fail \"backend path is a symlink\" 126\n[ -r \"$backend\" ] || fail \"backend not found or not readable: $backend\" 127\nexec 9< \"$backend\"\n# Every check below runs on the OPEN descriptor, and the same descriptor is what\n# gets executed: there is no reopen-by-name between verification and execution.\nmeta=$(\"$STAT\" -L -c '%F:%u:%a' /dev/fd/9 2>/dev/null) || fail \"cannot stat backend\" 126\nftype=${meta%%:*}; rest=${meta#*:}; owner=${rest%%:*}; mode=${rest#*:}\n[ \"$ftype\" = \"regular file\" ] || fail \"backend is not a regular file\" 126\nme=$(\"$ID\" -u)\n{ [ \"$owner\" = \"$me\" ] || [ \"$owner\" = 0 ]; } || fail \"backend is not owned by you or root\" 126\n[ $(( 8#$mode & 8#22 )) -eq 0 ] || fail \"backend is writable by group or others\" 126\nif [ \"$expected\" != \"-\" ]; then\n  actual=$(\"$SHA\" /dev/fd/9 2>/dev/null); actual=${actual%% *}\n  [ \"$actual\" = \"$expected\" ] || fail \"backend integrity check failed: not the pinned build\" 126\nfi\n# timeout (no --foreground) owns the process group: the deadline and a SIGTERM from\n# component destruction both terminate the whole tree. The cappers run inside the timed\n# command as pipeline members so every byte is flushed before the managed process exits.\nexec \"$TIMEOUT\" --kill-after=5 \"$deadline\" \"$BASH\" -c 'cap=$1; shift\n{ \"$@\" 2>&1 1>&3 | /usr/bin/head -c 65536 >&2; exit \"${PIPESTATUS[0]}\"; } 3>&1 | /usr/bin/head -c \"$((cap + 1))\"\nexit \"${PIPESTATUS[0]}\"' _ \"$cap\" /dev/fd/9 \"$@\"\n"
 var FALLBACK_FAMILY_GLYPH = "󰚩"
 var FAMILY_GLYPHS = {
   anthropic: "󰛄",
@@ -30,7 +30,33 @@ function utf8ByteLength(text) {
   }
 }
 
-function backendCommand(binary, args, deadlineSec, stdoutCapBytes) {
+// The reviewed, pinned backend release (leonaffi-byte/ai-usagebar tag v1.9.1-whkey.2).
+var BACKEND_SHA256 = "c965aec224f01d2802b1ef14488df0d6d0373c6593d5d1af19c6983375c5a5e7"
+var TRUSTED_BACKEND_SUBPATH = "/.local/share/switchboard/backend/ai-usagebar"
+
+function validSha256(value) {
+  return typeof value === "string" && /^[0-9a-f]{64}$/.test(value)
+}
+
+// Where the backend runs from. Normal operation: the trusted path under the
+// user's home, bound to the pinned release hash. A developer override (explicit
+// plugin setting, absolute path) skips only the hash — ownership, regular-file
+// and permission checks still apply — and is surfaced as a persistent warning.
+function backendSelection(home, developerBackend) {
+  var override = developerBackendSetting(developerBackend)
+  if (override !== "") return { path: override, sha256: null, developer: true }
+  var base = cleanText(home, 512).trim()
+  if (base === "" || base.charAt(0) !== "/") return { path: "", sha256: BACKEND_SHA256, developer: false }
+  return { path: base + TRUSTED_BACKEND_SUBPATH, sha256: BACKEND_SHA256, developer: false }
+}
+
+function developerBackendSetting(value) {
+  var text = cleanText(value, 512).trim()
+  if (text === "" || text.charAt(0) !== "/" || text.indexOf("\n") >= 0) return ""
+  return text
+}
+
+function backendCommand(binary, args, deadlineSec, stdoutCapBytes, expectedSha256) {
   if (typeof deadlineSec !== "number" || !isFinite(deadlineSec)
       || Math.floor(deadlineSec) !== deadlineSec || deadlineSec < 1 || deadlineSec > 600)
     return null
@@ -38,11 +64,17 @@ function backendCommand(binary, args, deadlineSec, stdoutCapBytes) {
       || Math.floor(stdoutCapBytes) !== stdoutCapBytes
       || stdoutCapBytes < 4096 || stdoutCapBytes > 4 * 1024 * 1024)
     return null
-  if (typeof binary !== "string" || binary.length === 0 || !Array.isArray(args))
+  if (typeof binary !== "string" || binary.length === 0 || binary.charAt(0) !== "/"
+      || !Array.isArray(args))
     return null
+  var expected = "-"
+  if (expectedSha256 !== undefined && expectedSha256 !== null) {
+    if (!validSha256(expectedSha256)) return null
+    expected = expectedSha256
+  }
 
-  var command = ["/usr/bin/env", "bash", "-c", WRAPPER_SCRIPT,
-    "switchboard-backend", String(deadlineSec), String(stdoutCapBytes), binary]
+  var command = ["/usr/bin/bash", "-c", WRAPPER_SCRIPT,
+    "switchboard-backend", String(deadlineSec), String(stdoutCapBytes), expected, binary]
   for (var i = 0; i < args.length; i++) {
     if (typeof args[i] !== "string") return null
     command.push(args[i])
@@ -1039,13 +1071,3 @@ function settingsWithOverrides(settings, moduleName, overrides) {
   return next
 }
 
-function binaryCandidates(env) {
-  var source = env && typeof env === "object" ? env : {}
-  var result = []
-  var override = String(source.AIUSAGEBAR_BIN || "")
-  var home = String(source.HOME || "")
-  if (override !== "") result.push(override)
-  if (home !== "") result.push(home + "/.local/bin/ai-usagebar")
-  result.push("ai-usagebar")
-  return result
-}

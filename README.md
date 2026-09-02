@@ -9,26 +9,33 @@ with AI Usage Bar.
 
 ## Requirements
 
-Switchboard is a frontend for the `ai-usagebar` **fork** that adds flat Claude
-account management (save, switch, rename, marker-trusted resync) and the
-report fields this plugin renders. Install the fork binary first:
+Switchboard is a frontend for a pinned, hash-verified release of the `ai-usagebar`
+**fork** (flat Claude account management: save, switch, rename, marker-trusted
+resync, and the report fields this plugin renders). The plugin only ever
+executes the backend from one trusted location, after verifying it:
 
 ```bash
-cargo install --locked --git https://github.com/leonaffi-byte/ai-usagebar \
-  --rev 41321cc7c29bc574fcc94e92d48fec74a475998c
+mkdir -p ~/.local/share/switchboard/backend
+cd ~/.local/share/switchboard/backend
+curl -fsSLO https://github.com/leonaffi-byte/ai-usagebar/releases/download/v1.9.1-whkey.2/ai-usagebar-x86_64-unknown-linux-gnu
+curl -fsSLO https://github.com/leonaffi-byte/ai-usagebar/releases/download/v1.9.1-whkey.2/SHA256SUMS
+sha256sum -c SHA256SUMS          # must print: ai-usagebar-x86_64-unknown-linux-gnu: OK
+install -m 0755 ai-usagebar-x86_64-unknown-linux-gnu ai-usagebar
 ```
 
-The backend is pinned to an immutable revision (tag `v1.9.1-whkey.2`); see
-[Backend provenance and audit guide](#backend-provenance-and-audit-guide).
+Expected SHA-256 of the release binary (also embedded in the plugin):
+`c965aec224f01d2802b1ef14488df0d6d0373c6593d5d1af19c6983375c5a5e7`
 
-The fork also auto-enables Kimi and SuperGrok when their CLI logins exist (set
+The release is built from commit `41321cc7c29bc574fcc94e92d48fec74a475998c`
+(tag `v1.9.1-whkey.2`) with `cargo build --release --locked`; see the release
+notes for the toolchain. The plugin refuses to run any other binary at that path
+(see [Trusted execution](#trusted-execution)). Building the backend yourself is
+supported only through the developer override described there.
+
+The fork auto-enables Kimi and SuperGrok when their CLI logins exist (set
 `enabled = false` in `~/.config/ai-usagebar/config.toml` to opt out), and
 providers that merely lack an API key are hidden from the dashboard until a key
 is added on the settings page.
-
-With the unmodified upstream `ai-usagebar` the plugin still shows usage, but
-account rows are display-only (no save, switch, or rename) and the unsaved-login
-helper never appears.
 
 ## Install
 
@@ -45,10 +52,6 @@ omarchy plugin remove leoom.switchboard
 Removal deletes the plugin folder and its bar entry. Switchboard stores no data
 of its own: usage caches and credentials belong to the `ai-usagebar` backend
 (`~/.cache/ai-usagebar`, `~/.claude`, `~/.config/ai-usagebar/config.toml`).
-
-Switchboard resolves the backend in this order: `AIUSAGEBAR_BIN`,
-`$HOME/.local/bin/ai-usagebar`, then `ai-usagebar` on `PATH`. The environment
-override is useful when testing a local fork build.
 
 The bar widget defaults to a five-minute refresh, a single Claude
 glyph-and-percent segment, auto-switch off, an 85% threshold, and usage alerts
@@ -150,9 +153,12 @@ that what a reviewer audits is what users execute.
 - **Reproducible build:** that revision commits `Cargo.lock`; `--locked` makes
   `cargo install` refuse any dependency drift, so the build is fully determined
   by the revision.
-- **Update policy:** the pin only changes through a new Switchboard commit that
-  updates the SHA above; the plugin never fetches, updates, or executes any
-  other source.
+- **Release artifact:** `v1.9.1-whkey.2` on GitHub ships the binary the plugin
+  executes plus `SHA256SUMS`; the plugin embeds that SHA-256 and verifies the
+  file before every execution.
+- **Update policy:** the pin and the embedded hash only change through a new
+  Switchboard commit; the plugin never fetches, updates, or executes any other
+  source.
 - **Verify what you built:** `cargo install --list` shows the installed
   revision; `git -C <clone> rev-parse HEAD` against the tag confirms it.
 
@@ -194,6 +200,34 @@ Saved accounts live in `~/.claude/accounts/<label>.credentials.json` with an
 - On the plugin side, `Service.qml` writes the patch to the process's stdin on
   start and immediately clears it from QML memory; key fields are
   `password: true` and blank means unchanged.
+
+### Trusted execution
+
+The backend runs only from `~/.local/share/switchboard/backend/ai-usagebar`.
+There is no `PATH` search and no environment override. Before every invocation
+the wrapper (`backendCommand` in `Model.js`, absolute tool paths only:
+`/usr/bin/bash`, `/usr/bin/timeout`, `/usr/bin/head`, `/usr/bin/stat`,
+`/usr/bin/sha256sum`, `/usr/bin/id`):
+
+1. rejects a symlink at the path and any non-absolute path;
+2. opens the file once (`exec 9<`), then validates **that descriptor**: regular
+   file, owned by the current user or root, not writable by group or others;
+3. computes SHA-256 of the same descriptor and compares it with the embedded
+   release hash;
+4. executes the same descriptor (`/dev/fd/9`) under `timeout` — the file is
+   never reopened by name between verification and execution, so a swap after
+   the check cannot substitute another binary.
+
+Any failure exits 126 with a one-line reason (shown in the panel's status
+strip) and nothing is executed; a missing file exits 127. The plugin's own
+startup probe runs `--version` through this exact path, so a tampered backend
+is refused before the first fetch.
+
+**Developer override.** The plugin setting "Developer backend override" (an
+absolute path, empty by default) runs a locally built backend without the hash
+check; the regular-file, ownership, and permission checks still apply. While it
+is set, the panel shows a persistent "developer backend override active —
+unreviewed build" warning. Use it only for a backend you built yourself.
 
 ### Bounded network behavior
 
