@@ -410,7 +410,7 @@ test('threshold alerts stay inert while disabled and are keyed per entry window'
   const high = {...claude('anthropic@work', false, 95), account_label: 'work'};
   const off = model.alertDecisions([high], {existing: false}, {enabled: false});
   assert.equal(off.notifications.length, 0);
-  assert.deepEqual(JSON.parse(JSON.stringify(off.armedState)), {existing: false});
+  assert.deepEqual(JSON.parse(JSON.stringify(off.armedState)), {});
 
   const on = model.alertDecisions([high], off.armedState, {enabled: true});
   assert.equal(on.notifications.length, 2);
@@ -996,4 +996,25 @@ test('bash never sources startup files, even when the caller hands it socket std
   assert.equal(r.status, 0, r.stderr);
   assert.equal(r.stdout, '/usr/bin|none');
   await fsp.rm(dir, {recursive: true, force: true});
+});
+
+test('alert armed-state never grows beyond the current entry set', () => {
+  let state = {};
+  for (let i = 0; i < 500; i++) {
+    const entry = {id: 'openai@cpx-' + i, display_name: 'x' + i, short_name: 'gpt', status: 'ready', error: '',
+      sections: [metric('Codex weekly', 80)]};
+    state = model.alertDecisions([entry], state, {enabled: true}).armedState;
+    assert.ok(Object.keys(state).length <= 2, 'state keys: ' + Object.keys(state).length);
+  }
+  const stable = {id: 'kimi', display_name: 'Kimi', short_name: 'kmi', status: 'ready', error: '',
+    sections: [metric('Weekly quota', 80)]};
+  const first = model.alertDecisions([stable], {}, {enabled: true});
+  assert.equal(first.notifications.length, 1);
+  const second = model.alertDecisions([stable], first.armedState, {enabled: true});
+  assert.equal(second.notifications.length, 0);
+  const huge = {};
+  const sep = String.fromCharCode(31);
+  for (let i = 0; i < 5000; i++) huge['kimi' + sep + 'window' + i + sep + 'Warn'] = false;
+  const capped = model.alertDecisions([stable], huge, {enabled: true}).armedState;
+  assert.ok(Object.keys(capped).length <= 1024);
 });
