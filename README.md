@@ -195,6 +195,20 @@ Saved accounts live in `~/.claude/accounts/<label>.credentials.json` with an
   start and immediately clears it from QML memory; key fields are
   `password: true` and blank means unchanged.
 
+### Bounded network behavior
+
+The backend contacts only the fixed provider hosts compiled into it, and only
+for providers that are enabled: `api.anthropic.com`, `chatgpt.com` and
+`auth.openai.com`, `api.kimi.com`/`api.kimi.ai` and `auth.kimi.*`,
+`api.x.ai`, `cli-chat-proxy.grok.com` and `auth.x.ai`, `api.z.ai`,
+`api.deepseek.com`, `api.openai.com`, `api.moonshot.*`, `api.minimax*`,
+`api.novita.ai`, `api.kilo.ai`, `api.commandcode.ai`, and
+`codewhisperer.us-east-1.amazonaws.com`. Every client uses
+`same_origin_redirect_policy` (`src/vendor.rs`, line 54), so a bearer token can
+never follow a cross-host redirect. Usage caches are bound to a SHA-256
+credential fingerprint (`src/anthropic/fetch.rs`, lines 452–465) so a switch can
+never surface another account's data.
+
 ### Bounded process behavior
 
 Switchboard spawns exactly two programs: `ai-usagebar` (subcommands
@@ -217,21 +231,6 @@ they reach argv. CLIProxyAPI token files, when that optional source is enabled,
 are opened read-only with `O_NOFOLLOW` (`src/cliproxy/mod.rs`, lines 278–283)
 and are never refreshed or written. These behaviors are pinned by tests that
 execute the real wrapper.
-
-### Bounded process behavior
-
-Every backend, executable-probe, and notification process runs through one
-fixed positional-argument wrapper. Total deadlines are 90 seconds for usage,
-30 seconds for account operations, 15/20 seconds for settings show/apply, 5
-seconds for probes, and 10 seconds for notifications. Producer-side stdout
-caps are respectively 1 MiB, 64 KiB, 256/64 KiB, 4 KiB, and 4 KiB; stderr is
-always capped at 64 KiB. `timeout` owns the child process group, escalates to
-SIGKILL after five seconds, and the service stops every process and drops all
-queued work when destroyed. Output is parsed only after a complete,
-non-truncated result. Command data remains argv-only, and account labels are
-validated before reaching it. CLIProxyAPI token files, when that optional
-source is enabled, are opened read-only with `O_NOFOLLOW` (`src/cliproxy/mod.rs`,
-lines 278–283) and are never refreshed or written.
 
 ## License
 
