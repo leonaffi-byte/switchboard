@@ -203,12 +203,27 @@ Item {
 
   function manualRefresh() {
     if (root.busy) return false
+    if (resolvedBinary === "") {
+      // A backend that was missing or refused at startup may have been
+      // installed or restored since: re-run the integrity probe. Its
+      // success accepts the binary and runs the queued refresh.
+      refreshQueued = true
+      beginBinaryResolution()
+      return true
+    }
     return startRefresh(true)
   }
 
   function requestAutomaticRefresh() {
-    if (root.busy || resolvedBinary === "") {
+    if (root.busy) {
       refreshQueued = true
+      return false
+    }
+    if (resolvedBinary === "") {
+      // Same recovery on the timer: keep probing an unresolved backend so a
+      // fixed installation is picked up without restarting the shell.
+      refreshQueued = true
+      beginBinaryResolution()
       return false
     }
     return startRefresh(false)
