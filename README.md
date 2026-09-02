@@ -195,19 +195,28 @@ Saved accounts live in `~/.claude/accounts/<label>.credentials.json` with an
   start and immediately clears it from QML memory; key fields are
   `password: true` and blank means unchanged.
 
-### Bounded network behavior
+### Bounded process behavior
 
-The backend contacts only the fixed provider hosts compiled into it, and only
-for providers that are enabled: `api.anthropic.com`, `chatgpt.com` and
-`auth.openai.com`, `api.kimi.com`/`api.kimi.ai` and `auth.kimi.*`,
-`api.x.ai`, `cli-chat-proxy.grok.com` and `auth.x.ai`, `api.z.ai`,
-`api.deepseek.com`, `api.openai.com`, `api.moonshot.*`, `api.minimax*`,
-`api.novita.ai`, `api.kilo.ai`, `api.commandcode.ai`, and
-`codewhisperer.us-east-1.amazonaws.com`. Every client uses
-`same_origin_redirect_policy` (`src/vendor.rs`, line 54), so a bearer token can
-never follow a cross-host redirect. Usage caches are bound to a SHA-256
-credential fingerprint (`src/anthropic/fetch.rs`, lines 452–465) so a switch can
-never surface another account's data.
+Switchboard spawns exactly two programs: `ai-usagebar` (subcommands
+`usage --json`, `account save|switch|toggle|rename`, `settings show|apply`) and
+`notify-send`. Every invocation goes through one fixed, positional bash wrapper
+(`backendCommand` in `Model.js`; the binary and arguments travel as `"$@"` and are
+never spliced into the script). The wrapper `exec`s into coreutils
+`timeout --kill-after=5`, which runs the command in its own process group: on the
+deadline it signals the whole group and escalates to SIGKILL, and when the shell
+destroys the component (`Component.onDestruction` stops every process) the
+SIGTERM lands on `timeout` itself, so no grandchild outlives the plugin. stdout
+and stderr are capped at the producer boundary (`head -c`, reading one byte past
+the cap so overflow is provable by UTF-8 byte length). Deadlines and caps: usage
+90 s / 1 MiB, account operations 30 s / 64 KiB, settings show 15 s / 256 KiB,
+settings apply 20 s / 64 KiB, binary probe 5 s, notifications 10 s; stderr is
+always capped at 64 KiB. A process counts as complete only after it has exited
+*and* both capped streams have ended; a deadline exit (124/137) or an overflow
+is reported as a failure and never parsed. Account labels are validated before
+they reach argv. CLIProxyAPI token files, when that optional source is enabled,
+are opened read-only with `O_NOFOLLOW` (`src/cliproxy/mod.rs`, lines 278–283)
+and are never refreshed or written. These behaviors are pinned by tests that
+execute the real wrapper.
 
 ### Bounded process behavior
 
