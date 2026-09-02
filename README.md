@@ -134,7 +134,9 @@ omarchy-shell leoom.switchboard settings
 ```
 
 `toggleAccount` runs the backend's guarded manual account toggle regardless of
-the auto-switch setting. For a Hyprland shortcut, add:
+the auto-switch setting. Like every shell IPC method, it is reachable by any
+process running as your user — the same trust boundary as running the backend
+CLI yourself. For a Hyprland shortcut, add:
 
 ```ini
 bind = CTRL ALT SHIFT, S, exec, omarchy-shell leoom.switchboard toggleAccount
@@ -223,11 +225,24 @@ strip) and nothing is executed; a missing file exits 127. The plugin's own
 startup probe runs `--version` through this exact path, so a tampered backend
 is refused before the first fetch.
 
+The wrapper is spawned through `/usr/bin/env -i` with a fixed allow-list of
+variables (`HOME`, `USER`, locale, XDG dirs, the D-Bus/Wayland addresses,
+`PATH=/usr/bin`), so nothing from the shell's environment — `BASH_ENV`, exported
+functions, `LD_PRELOAD`/`LD_AUDIT`/`LD_LIBRARY_PATH`, `GLIBC_TUNABLES` — can
+influence bash, the tools, or the backend; the wrapper unsets those names again
+as defense in depth. The backend's containing directory must also be owned by
+you or root and not writable by group or others, and setuid/setgid binaries are
+refused. Account labels must start with a letter or digit, so a label can never
+be parsed as a command-line option by the backend.
+
 **Developer override.** The plugin setting "Developer backend override" (an
 absolute path, empty by default) runs a locally built backend without the hash
-check; the regular-file, ownership, and permission checks still apply. While it
-is set, the panel shows a persistent "developer backend override active —
-unreviewed build" warning. Use it only for a backend you built yourself.
+check; the regular-file, directory, ownership, permission, and setuid checks
+still apply. While it is set, the panel shows a persistent "developer backend
+override active — unreviewed build" warning. Treat this setting as granting code
+execution as your user: anything able to write the plugin's persisted settings
+can point it at an arbitrary binary. Use it only for a backend you built
+yourself.
 
 ### Bounded network behavior
 

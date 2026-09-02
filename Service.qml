@@ -105,6 +105,24 @@ Item {
     return ""
   }
 
+  function backendEnvironment() {
+    return Model.safeEnvironment(function(key) { return Quickshell.env(key) })
+  }
+
+  // Every Process start goes through here: a command the builder refused
+  // (null) must never leave a dangling completion or a lingering secret payload.
+  function startBounded(process, name, command) {
+    if (!command || command.length === 0) {
+      statusError = "backend command could not be built"
+      if (name === "settingsApply") settingsApplyPayload = ""
+      return false
+    }
+    process.command = command
+    beginCompletion(name)
+    process.running = true
+    return true
+  }
+
   function configure(values) {
     var source = values && typeof values === "object" ? values : {}
     refreshIntervalSec = Model.integerSetting(source.refreshIntervalSec, 300, 60, 3600, 30)
@@ -115,7 +133,7 @@ Item {
     var nextOverride = Model.developerBackendSetting(source.developerBackend)
     if (nextOverride !== developerBackend) {
       developerBackend = nextOverride
-      if (resolvedBinary !== "" || backendProblem !== "") beginBinaryResolution()
+      if (resolvedBinary !== "" || backendProblem !== "" || binaryMissing) beginBinaryResolution()
     }
   }
 
@@ -179,9 +197,7 @@ Item {
     refreshQueued = false
     usageStdout = ""
     usageStderr = ""
-    usageProcess.command = Model.backendCommand(resolvedBinary, ["usage", "--json"], 90, 1048576, developerBackendActive ? null : resolvedSha256)
-    beginCompletion("usage")
-    usageProcess.running = true
+    if (!startBounded(usageProcess, "usage", Model.backendCommand(resolvedBinary, ["usage", "--json"], 90, 1048576, developerBackendActive ? null : resolvedSha256, backendEnvironment()))) return false
     return true
   }
 
@@ -258,9 +274,7 @@ Item {
     switchStderr = ""
     switchMode = automatic === true ? "auto" : "manual"
     switchContext = context || null
-    switchProcess.command = Model.backendCommand(resolvedBinary, ["account", "switch", String(label), "--cli"], 30, 65536, developerBackendActive ? null : resolvedSha256)
-    beginCompletion("switch")
-    switchProcess.running = true
+    if (!startBounded(switchProcess, "switch", Model.backendCommand(resolvedBinary, ["account", "switch", String(label), "--cli"], 30, 65536, developerBackendActive ? null : resolvedSha256, backendEnvironment()))) return false
     return true
   }
 
@@ -277,9 +291,7 @@ Item {
     switchStderr = ""
     switchMode = "toggle"
     switchContext = null
-    switchProcess.command = Model.backendCommand(resolvedBinary, ["account", "toggle"], 30, 65536, developerBackendActive ? null : resolvedSha256)
-    beginCompletion("switch")
-    switchProcess.running = true
+    if (!startBounded(switchProcess, "switch", Model.backendCommand(resolvedBinary, ["account", "toggle"], 30, 65536, developerBackendActive ? null : resolvedSha256, backendEnvironment()))) return false
     return true
   }
 
@@ -288,9 +300,7 @@ Item {
     statusError = ""
     saveStdout = ""
     saveStderr = ""
-    saveProcess.command = Model.backendCommand(resolvedBinary, ["account", "save", String(label)], 30, 65536, developerBackendActive ? null : resolvedSha256)
-    beginCompletion("save")
-    saveProcess.running = true
+    if (!startBounded(saveProcess, "save", Model.backendCommand(resolvedBinary, ["account", "save", String(label)], 30, 65536, developerBackendActive ? null : resolvedSha256, backendEnvironment()))) return false
     return true
   }
 
@@ -311,9 +321,7 @@ Item {
     settingsLoadQueued = false
     settingsShowStdout = ""
     settingsShowStderr = ""
-    settingsShowProcess.command = Model.backendCommand(resolvedBinary, ["settings", "show"], 15, 262144, developerBackendActive ? null : resolvedSha256)
-    beginCompletion("settingsShow")
-    settingsShowProcess.running = true
+    if (!startBounded(settingsShowProcess, "settingsShow", Model.backendCommand(resolvedBinary, ["settings", "show"], 15, 262144, developerBackendActive ? null : resolvedSha256, backendEnvironment()))) return false
     return true
   }
 
@@ -354,9 +362,7 @@ Item {
     settingsApplyStdout = ""
     settingsApplyStderr = ""
     settingsApplyPayload = String(payload)
-    settingsApplyProcess.command = Model.backendCommand(resolvedBinary, ["settings", "apply"], 20, 65536, developerBackendActive ? null : resolvedSha256)
-    beginCompletion("settingsApply")
-    settingsApplyProcess.running = true
+    if (!startBounded(settingsApplyProcess, "settingsApply", Model.backendCommand(resolvedBinary, ["settings", "apply"], 20, 65536, developerBackendActive ? null : resolvedSha256, backendEnvironment()))) return false
     return true
   }
 
@@ -422,9 +428,7 @@ Item {
     notificationQueue = next
     notifyStdout = ""
     notifyStderr = ""
-    notifyProcess.command = Model.backendCommand("/usr/bin/notify-send", command.slice(1), 10, 4096, null)
-    beginCompletion("notify")
-    notifyProcess.running = true
+    if (!startBounded(notifyProcess, "notify", Model.backendCommand("/usr/bin/notify-send", ["--"].concat(command.slice(1)), 10, 4096, null, backendEnvironment()))) return false
   }
 
   function drainWorkQueues() {
@@ -485,9 +489,7 @@ Item {
     statusError = ""
     renameStdout = ""
     renameStderr = ""
-    renameProcess.command = Model.backendCommand(resolvedBinary, ["account", "rename", String(oldLabel), String(newLabel)], 30, 65536, developerBackendActive ? null : resolvedSha256)
-    beginCompletion("rename")
-    renameProcess.running = true
+    if (!startBounded(renameProcess, "rename", Model.backendCommand(resolvedBinary, ["account", "rename", String(oldLabel), String(newLabel)], 30, 65536, developerBackendActive ? null : resolvedSha256, backendEnvironment()))) return false
     return true
   }
 

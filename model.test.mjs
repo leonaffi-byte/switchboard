@@ -520,14 +520,15 @@ test('settings helpers preserve unknown keys and clamp manifest values', () => {
 test('backend commands use one fixed positional wrapper and validate their bounds', () => {
   const args = ['usage', '--profile', 'team name', '${HOME}', '-x'];
   const command = Array.from(model.backendCommand('/opt/switch board/bin', args, 90, 1048576));
-  assert.deepEqual(command.slice(0, 2), ['/usr/bin/bash', '-c']);
+  assert.deepEqual(command.slice(0, 2), ['/usr/bin/env', '-i']);
   assert.equal(typeof model.WRAPPER_SCRIPT, 'string');
-  assert.equal(command[2], model.WRAPPER_SCRIPT);
-  assert.equal(command[3], 'switchboard-backend');
-  assert.deepEqual(command.slice(4, 8), ['90', '1048576', '-', '/opt/switch board/bin']);
-  assert.deepEqual(command.slice(8), args);
+  assert.equal(command[command.indexOf('-c') + 1], model.WRAPPER_SCRIPT);
+  assert.equal(command[command.indexOf('switchboard-backend')], 'switchboard-backend');
+  const at = command.indexOf('switchboard-backend');
+  assert.deepEqual(command.slice(at + 1, at + 5), ['90', '1048576', '-', '/opt/switch board/bin']);
+  assert.deepEqual(command.slice(at + 5), args);
 
-  const script = command[2];
+  const script = command[command.indexOf('-c') + 1];
   assert.match(script, /deadline=\$1; cap=\$2; expected=\$3; backend=\$4; shift 4/);
   assert.match(script, /\$TIMEOUT" --kill-after=5/);
   assert.match(script, /head -c 65536/);
@@ -592,12 +593,12 @@ test('manifest and QML retain the required plugin lifecycle contracts', () => {
 
   const service = fs.readFileSync(new URL('./Service.qml', import.meta.url), 'utf8');
   assert.match(service, /target:\s*"leoom\.switchboard"/);
-  assert.match(service, /Model\.backendCommand\(resolvedBinary, \["usage", "--json"\], 90, 1048576, developerBackendActive \? null : resolvedSha256\)/);
-  assert.match(service, /Model\.backendCommand\(resolvedBinary,\s*\["account", "switch", String\(label\), "--cli"\], 30, 65536, developerBackendActive \? null : resolvedSha256\)/);
-  assert.match(service, /Model\.backendCommand\(resolvedBinary,\s*\["account", "save", String\(label\)\], 30, 65536, developerBackendActive \? null : resolvedSha256\)/);
-  assert.match(service, /Model\.backendCommand\(resolvedBinary,\s*\["account", "toggle"\], 30, 65536, developerBackendActive \? null : resolvedSha256\)/);
-  assert.match(service, /Model\.backendCommand\(resolvedBinary,\s*\["settings", "show"\], 15, 262144, developerBackendActive \? null : resolvedSha256\)/);
-  assert.match(service, /Model\.backendCommand\(resolvedBinary,\s*\["settings", "apply"\], 20, 65536, developerBackendActive \? null : resolvedSha256\)/);
+  assert.match(service, /Model\.backendCommand\(resolvedBinary, \["usage", "--json"\], 90, 1048576, developerBackendActive \? null : resolvedSha256, backendEnvironment\(\)\)/);
+  assert.match(service, /Model\.backendCommand\(resolvedBinary,\s*\["account", "switch", String\(label\), "--cli"\], 30, 65536, developerBackendActive \? null : resolvedSha256, backendEnvironment\(\)\)/);
+  assert.match(service, /Model\.backendCommand\(resolvedBinary,\s*\["account", "save", String\(label\)\], 30, 65536, developerBackendActive \? null : resolvedSha256, backendEnvironment\(\)\)/);
+  assert.match(service, /Model\.backendCommand\(resolvedBinary,\s*\["account", "toggle"\], 30, 65536, developerBackendActive \? null : resolvedSha256, backendEnvironment\(\)\)/);
+  assert.match(service, /Model\.backendCommand\(resolvedBinary,\s*\["settings", "show"\], 15, 262144, developerBackendActive \? null : resolvedSha256, backendEnvironment\(\)\)/);
+  assert.match(service, /Model\.backendCommand\(resolvedBinary,\s*\["settings", "apply"\], 20, 65536, developerBackendActive \? null : resolvedSha256, backendEnvironment\(\)\)/);
   assert.match(service, /stdinEnabled:\s*true/);
   assert.match(service, /write\(root\.settingsApplyPayload \+ "\\n"\)[\s\S]*?settingsApplyPayload = ""/);
   assert.match(service, /Model\.settingsApplySucceeded\(exitCode, settingsApplyStdout\)/);
@@ -686,11 +687,13 @@ test('every service process is bounded and stopped during destruction', () => {
   const service = fs.readFileSync(new URL('./Service.qml', import.meta.url), 'utf8');
   const commandProperties = service.match(/^\s*command:\s*\[\]\s*$/gm) || [];
   assert.equal(commandProperties.length, 8);
-  assert.equal((service.match(/Process\.command\s*=\s*Model\.backendCommand\(/g) || []).length, 9);
+  assert.equal((service.match(/Process\.command\s*=\s*Model\.backendCommand\(/g) || []).length, 1);
+  assert.equal((service.match(/startBounded\([a-zA-Z]+Process, "[a-zA-Z]+", Model\.backendCommand\(/g) || []).length, 8);
   assert.doesNotMatch(service, /Process\.command\s*=\s*\[/);
   assert.doesNotMatch(service, /\["\/usr\/bin\/env",\s*resolvedBinary/);
   assert.match(service, /Model\.backendCommand\(selection\.path, \["--version"\], 5, 4096,/);
-  assert.match(service, /Model\.backendCommand\("\/usr\/bin\/notify-send", command\.slice\(1\), 10, 4096, null\)/);
+  assert.equal((service.match(/startBounded\(/g) || []).length >= 8, true);
+  assert.match(service, /Model\.backendCommand\("\/usr\/bin\/notify-send", \["--"\]\.concat\(command\.slice\(1\)\), 10, 4096, null, backendEnvironment\(\)\)/);
 
   const boundedHelper = service.slice(service.indexOf('function boundedCompletionError'),
     service.indexOf('function enqueueNotification'));
@@ -837,7 +840,7 @@ test('backend completion waits for exit and both capped streams', () => {
   assert.equal((service.match(/root\.markCompletion\("[A-Za-z]+", "err"\)/g) || []).length, 8);
   assert.match(service, /if \(state\.exit === null \|\| !state\.out \|\| !state\.err\) return/);
   assert.doesNotMatch(service, /onExited: function\(exitCode\) \{[^}]*Qt\.callLater/);
-  assert.equal((service.match(/beginCompletion\("[A-Za-z]+"\)/g) || []).length, 9);
+  assert.ok((service.match(/beginCompletion\(/g) || []).length >= 2);
 });
 
 test('execution is bound to a verified descriptor: hash, symlink, ownership, permissions, PATH', async () => {
@@ -923,10 +926,53 @@ test('backend selection prefers the trusted pinned path and only an explicit abs
   assert.equal(model.backendSelection('', '').path, '');
   assert.equal(model.developerBackendSetting('  /x/y  '), '/x/y');
   assert.equal(model.developerBackendSetting('x'), '');
-  const script = model.backendCommand('/usr/bin/true', [], 5, 4096, null)[2];
+  const built = model.backendCommand('/usr/bin/true', [], 5, 4096, null);
+  const script = built[built.indexOf('-c') + 1];
   assert.doesNotMatch(script, /\benv\b/);
   for (const tool of ['timeout', 'bash', 'head', 'sha256sum', 'stat', 'id'])
     assert.match(script, new RegExp('/usr/bin/' + tool));
   assert.match(script, /exec 9< "\$backend"/);
   assert.match(script, /\/dev\/fd\/9 "\$@"/);
+});
+
+test('environment cannot subvert the wrapper: env -i allow-list, BASH_ENV, LD_PRELOAD, hostile labels', async () => {
+  const {spawnSync} = await import('node:child_process');
+  const fsp = await import('node:fs/promises');
+  const os = await import('node:os');
+  const path = await import('node:path');
+  const crypto = await import('node:crypto');
+  const dir = await fsp.mkdtemp(path.join(os.tmpdir(), 'sb-env-'));
+  const backend = path.join(dir, 'backend');
+  await fsp.writeFile(backend, '#!/usr/bin/bash\nprintf "%s|%s|%s" "${BASH_ENV:-none}" "${LD_PRELOAD:-none}" "${PATH}"\n', {mode: 0o755});
+  const sha = crypto.createHash('sha256').update(await fsp.readFile(backend)).digest('hex');
+  const trap = path.join(dir, 'trap.sh');
+  await fsp.writeFile(trap, `printf trapped > "${dir}/trapped"\n`);
+  const env = model.safeEnvironment({HOME: '/home/x', USER: 'x', BASH_ENV: trap, LD_PRELOAD: '/evil.so', PATH: '/evil'});
+  assert.equal(env.filter(p => /^(BASH_ENV|LD_PRELOAD)=/.test(p)).length, 0);
+  assert.ok(env.includes('PATH=/usr/bin') && env.includes('HOME=/home/x'));
+  const r = spawnSync('/usr/bin/env', model.backendCommand(backend, [], 5, 4096, sha, env).slice(1),
+    {encoding: 'utf8', env: {BASH_ENV: trap, LD_PRELOAD: '/evil.so', PATH: '/evil', HOME: '/home/x'}});
+  assert.equal(r.status, 0, r.stderr);
+  assert.equal(r.stdout, 'none|none|/usr/bin');
+  assert.equal(!!(await fsp.stat(path.join(dir, 'trapped')).catch(() => null)), false);
+  // hostile environment entries never build a command
+  assert.equal(model.backendCommand(backend, [], 5, 4096, sha, ['PATH=/usr/bin', 'X=a\nb']), null);
+  assert.equal(model.backendCommand(backend, [], 5, 4096, sha, ['not an assignment']), null);
+  // setuid backend refused; group-writable directory refused
+  await fsp.chmod(backend, 0o4755);
+  let rr = spawnSync('/usr/bin/env', model.backendCommand(backend, [], 5, 4096, sha, env).slice(1), {encoding: 'utf8'});
+  assert.equal(rr.status, 126); assert.match(rr.stderr, /setuid/);
+  await fsp.chmod(backend, 0o755);
+  await fsp.chmod(dir, 0o775);
+  rr = spawnSync('/usr/bin/env', model.backendCommand(backend, [], 5, 4096, sha, env).slice(1), {encoding: 'utf8'});
+  assert.equal(rr.status, 126); assert.match(rr.stderr, /directory is writable/);
+  await fsp.chmod(dir, 0o755);
+  // labels can never look like options
+  for (const bad of ['-h', '--force', '-']) {
+    assert.equal(model.validSaveLabel(bad), false);
+    assert.equal(model.isSwitchableEntry({id: 'anthropic@' + bad, active: false}), false);
+    assert.equal(model.renameLabel({id: 'anthropic@' + bad}), null);
+  }
+  assert.equal(model.validSaveLabel('a-b'), true);
+  await fsp.rm(dir, {recursive: true, force: true});
 });

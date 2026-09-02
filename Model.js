@@ -3,7 +3,7 @@
 
 var MAX_ENTRIES = 64
 var MAX_SECTIONS = 96
-var WRAPPER_SCRIPT = "deadline=$1; cap=$2; expected=$3; backend=$4; shift 4\n# Trusted absolute tools only: PATH is never consulted anywhere in this wrapper.\nTIMEOUT=/usr/bin/timeout; BASH=/usr/bin/bash; STAT=/usr/bin/stat; SHA=/usr/bin/sha256sum; ID=/usr/bin/id\nfail() { printf 'switchboard: %s\\n' \"$1\" >&2; exit \"$2\"; }\ncase \"$backend\" in /*) ;; *) fail \"backend path must be absolute\" 126;; esac\n[ -L \"$backend\" ] && fail \"backend path is a symlink\" 126\n[ -r \"$backend\" ] || fail \"backend not found or not readable: $backend\" 127\nexec 9< \"$backend\"\n# Every check below runs on the OPEN descriptor, and the same descriptor is what\n# gets executed: there is no reopen-by-name between verification and execution.\nmeta=$(\"$STAT\" -L -c '%F:%u:%a' /dev/fd/9 2>/dev/null) || fail \"cannot stat backend\" 126\nftype=${meta%%:*}; rest=${meta#*:}; owner=${rest%%:*}; mode=${rest#*:}\n[ \"$ftype\" = \"regular file\" ] || fail \"backend is not a regular file\" 126\nme=$(\"$ID\" -u)\n{ [ \"$owner\" = \"$me\" ] || [ \"$owner\" = 0 ]; } || fail \"backend is not owned by you or root\" 126\n[ $(( 8#$mode & 8#22 )) -eq 0 ] || fail \"backend is writable by group or others\" 126\nif [ \"$expected\" != \"-\" ]; then\n  actual=$(\"$SHA\" /dev/fd/9 2>/dev/null); actual=${actual%% *}\n  [ \"$actual\" = \"$expected\" ] || fail \"backend integrity check failed: not the pinned build\" 126\nfi\n# timeout (no --foreground) owns the process group: the deadline and a SIGTERM from\n# component destruction both terminate the whole tree. The cappers run inside the timed\n# command as pipeline members so every byte is flushed before the managed process exits.\nexec \"$TIMEOUT\" --kill-after=5 \"$deadline\" \"$BASH\" -c 'cap=$1; shift\n{ \"$@\" 2>&1 1>&3 | /usr/bin/head -c 65536 >&2; exit \"${PIPESTATUS[0]}\"; } 3>&1 | /usr/bin/head -c \"$((cap + 1))\"\nexit \"${PIPESTATUS[0]}\"' _ \"$cap\" /dev/fd/9 \"$@\"\n"
+var WRAPPER_SCRIPT = "deadline=$1; cap=$2; expected=$3; backend=$4; shift 4\n# Defense in depth: the caller already spawns us with a cleared, allow-listed\n# environment; drop anything that could still influence bash, the tools, or the\n# backend's dynamic loader.\nunset BASH_ENV ENV BASH_FUNC_printf%% LD_PRELOAD LD_AUDIT LD_LIBRARY_PATH GLIBC_TUNABLES\n# Trusted absolute tools only: PATH is never consulted anywhere in this wrapper.\nTIMEOUT=/usr/bin/timeout; BASH=/usr/bin/bash; STAT=/usr/bin/stat; SHA=/usr/bin/sha256sum; ID=/usr/bin/id\nfail() { /usr/bin/printf 'switchboard: %s\\n' \"$1\" >&2; exit \"$2\"; }\ncase \"$backend\" in /*) ;; *) fail \"backend path must be absolute\" 126;; esac\n[ -L \"$backend\" ] && fail \"backend path is a symlink\" 126\n[ -r \"$backend\" ] || fail \"backend not found or not readable: $backend\" 127\ndir=${backend%/*}\ndmeta=$(\"$STAT\" -L -c '%u:%a' \"$dir\" 2>/dev/null) || fail \"cannot stat backend directory\" 126\nme=$(\"$ID\" -u)\ndowner=${dmeta%%:*}; dmode=${dmeta#*:}\n{ [ \"$downer\" = \"$me\" ] || [ \"$downer\" = 0 ]; } || fail \"backend directory is not owned by you or root\" 126\n[ $(( 8#$dmode & 8#22 )) -eq 0 ] || fail \"backend directory is writable by group or others\" 126\nexec 9< \"$backend\"\n# Every check below runs on the OPEN descriptor, and the same descriptor is what\n# gets executed: there is no reopen-by-name between verification and execution.\nmeta=$(\"$STAT\" -L -c '%F:%u:%a' /dev/fd/9 2>/dev/null) || fail \"cannot stat backend\" 126\nftype=${meta%%:*}; rest=${meta#*:}; owner=${rest%%:*}; mode=${rest#*:}\n[ \"$ftype\" = \"regular file\" ] || fail \"backend is not a regular file\" 126\n{ [ \"$owner\" = \"$me\" ] || [ \"$owner\" = 0 ]; } || fail \"backend is not owned by you or root\" 126\n[ $(( 8#$mode & 8#22 )) -eq 0 ] || fail \"backend is writable by group or others\" 126\n[ $(( 8#$mode & 8#7000 )) -eq 0 ] || fail \"backend is setuid or setgid\" 126\nif [ \"$expected\" != \"-\" ]; then\n  actual=$(\"$SHA\" /dev/fd/9 2>/dev/null); actual=${actual%% *}\n  [ \"$actual\" = \"$expected\" ] || fail \"backend integrity check failed: not the pinned build\" 126\nfi\n# timeout (no --foreground) owns the process group: the deadline and a SIGTERM from\n# component destruction both terminate the whole tree. The cappers run inside the timed\n# command as pipeline members so every byte is flushed before the managed process exits.\nexec \"$TIMEOUT\" --kill-after=5 \"$deadline\" \"$BASH\" -c 'cap=$1; shift\n{ \"$@\" 2>&1 1>&3 | /usr/bin/head -c 65536 >&2; exit \"${PIPESTATUS[0]}\"; } 3>&1 | /usr/bin/head -c \"$((cap + 1))\"\nexit \"${PIPESTATUS[0]}\"' _ \"$cap\" /dev/fd/9 \"$@\"\n"
 var FALLBACK_FAMILY_GLYPH = "󰚩"
 var FAMILY_GLYPHS = {
   anthropic: "󰛄",
@@ -33,6 +33,29 @@ function utf8ByteLength(text) {
 // The reviewed, pinned backend release (leonaffi-byte/ai-usagebar tag v1.9.1-whkey.2).
 var BACKEND_SHA256 = "c965aec224f01d2802b1ef14488df0d6d0373c6593d5d1af19c6983375c5a5e7"
 var TRUSTED_BACKEND_SUBPATH = "/.local/share/switchboard/backend/ai-usagebar"
+// Release binding: leonaffi-byte/ai-usagebar tag v1.9.1-whkey.2, asset
+// ai-usagebar-x86_64-unknown-linux-gnu; SHA256SUMS in that release. Bumping the
+// backend means a new release, a new BACKEND_SHA256 here, and the README hash.
+
+// The only environment variables handed to the wrapper (via /usr/bin/env -i).
+// Nothing else from the shell's environment can reach bash, the tools, or the
+// backend: no BASH_ENV, no exported functions, no LD_* or GLIBC tunables.
+var ENVIRONMENT_ALLOWLIST = ["HOME", "USER", "LOGNAME", "LANG", "LC_ALL", "XDG_RUNTIME_DIR",
+  "XDG_CONFIG_HOME", "XDG_CACHE_HOME", "XDG_DATA_HOME", "DBUS_SESSION_BUS_ADDRESS",
+  "WAYLAND_DISPLAY", "DISPLAY", "TMPDIR"]
+
+function safeEnvironment(lookup) {
+  var pairs = ["PATH=/usr/bin"]
+  for (var i = 0; i < ENVIRONMENT_ALLOWLIST.length; i++) {
+    var key = ENVIRONMENT_ALLOWLIST[i]
+    var value = typeof lookup === "function" ? lookup(key) : (lookup ? lookup[key] : undefined)
+    if (value === undefined || value === null) continue
+    var text = String(value)
+    if (text === "" || /[\u0000\n\r]/.test(text)) continue
+    pairs.push(key + "=" + text)
+  }
+  return pairs
+}
 
 function validSha256(value) {
   return typeof value === "string" && /^[0-9a-f]{64}$/.test(value)
@@ -46,7 +69,8 @@ function backendSelection(home, developerBackend) {
   var override = developerBackendSetting(developerBackend)
   if (override !== "") return { path: override, sha256: null, developer: true }
   var base = cleanText(home, 512).trim()
-  if (base === "" || base.charAt(0) !== "/") return { path: "", sha256: BACKEND_SHA256, developer: false }
+  if (base === "" || base.charAt(0) !== "/" || base.indexOf("\n") >= 0)
+    return { path: "", sha256: BACKEND_SHA256, developer: false }
   return { path: base + TRUSTED_BACKEND_SUBPATH, sha256: BACKEND_SHA256, developer: false }
 }
 
@@ -56,7 +80,7 @@ function developerBackendSetting(value) {
   return text
 }
 
-function backendCommand(binary, args, deadlineSec, stdoutCapBytes, expectedSha256) {
+function backendCommand(binary, args, deadlineSec, stdoutCapBytes, expectedSha256, environment) {
   if (typeof deadlineSec !== "number" || !isFinite(deadlineSec)
       || Math.floor(deadlineSec) !== deadlineSec || deadlineSec < 1 || deadlineSec > 600)
     return null
@@ -73,8 +97,12 @@ function backendCommand(binary, args, deadlineSec, stdoutCapBytes, expectedSha25
     expected = expectedSha256
   }
 
-  var command = ["/usr/bin/bash", "-c", WRAPPER_SCRIPT,
-    "switchboard-backend", String(deadlineSec), String(stdoutCapBytes), expected, binary]
+  var env = Array.isArray(environment) ? environment : ["PATH=/usr/bin"]
+  for (var e = 0; e < env.length; e++) {
+    if (typeof env[e] !== "string" || !/^[A-Z_][A-Z0-9_]*=[^\u0000\n\r]*$/.test(env[e])) return null
+  }
+  var command = ["/usr/bin/env", "-i"].concat(env).concat(["/usr/bin/bash", "-c", WRAPPER_SCRIPT,
+    "switchboard-backend", String(deadlineSec), String(stdoutCapBytes), expected, binary])
   for (var i = 0; i < args.length; i++) {
     if (typeof args[i] !== "string") return null
     command.push(args[i])
@@ -374,7 +402,7 @@ function isActiveEntry(entry) {
 }
 
 function validAccountLabel(text) {
-  return /^[a-z0-9_-]{1,32}$/.test(String(text === undefined || text === null ? "" : text))
+  return /^[a-z0-9][a-z0-9_-]{0,31}$/.test(String(text === undefined || text === null ? "" : text))
 }
 
 function switchLabel(entry) {
