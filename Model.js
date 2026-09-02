@@ -3,7 +3,7 @@
 
 var MAX_ENTRIES = 64
 var MAX_SECTIONS = 96
-var WRAPPER_SCRIPT = "deadline=$1; cap=$2; shift 2\n# exec makes timeout the process the shell manages: a SIGTERM from component destruction\n# lands on timeout, which (without --foreground) signals its whole process group, and the\n# deadline escalates to SIGKILL after 5s. Both streams are capped at the producer boundary;\n# stdout reads cap+1 bytes so the consumer can prove overflow by byte length alone.\nexec timeout --kill-after=5 \"$deadline\" \"$@\" > >(head -c \"$((cap + 1))\") 2> >(head -c 65536 >&2)\n"
+var WRAPPER_SCRIPT = "deadline=$1; cap=$2; shift 2\n# exec makes timeout the process the shell manages: a SIGTERM from component destruction\n# lands on timeout, which (without --foreground) signals its whole process group, and the\n# deadline escalates to SIGKILL after 5s. The cappers run INSIDE the timed command as\n# pipeline members (no process substitutions), so every byte is flushed and every pipe is\n# closed before the managed process exits — the shell never sees output after exit.\n# stdout reads cap+1 bytes so the consumer can prove overflow by byte length alone.\nexec timeout --kill-after=5 \"$deadline\" bash -c 'cap=$1; shift\n{ \"$@\" 2>&1 1>&3 | head -c 65536 >&2; exit \"${PIPESTATUS[0]}\"; } 3>&1 | head -c \"$((cap + 1))\"\nexit \"${PIPESTATUS[0]}\"\n' _ \"$cap\" \"$@\"\n"
 var FALLBACK_FAMILY_GLYPH = "󰚩"
 var FAMILY_GLYPHS = {
   anthropic: "󰛄",
