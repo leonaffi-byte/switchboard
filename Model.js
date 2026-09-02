@@ -442,6 +442,16 @@ function validSaveLabel(text) {
   return validAccountLabel(text)
 }
 
+// True when `account save <label>` was refused because the target slot holds a
+// different Claude login than the one live now. The backend prints
+// "refusing to overwrite existing flat Claude account …; pass `--force` to
+// replace it" and exits non-zero; the widget offers an Overwrite button for
+// exactly that case rather than silently forcing every save.
+function isLineageConflict(stderrText) {
+  var s = String(stderrText === undefined || stderrText === null ? "" : stderrText)
+  return /refusing to overwrite/.test(s) && /--force/.test(s)
+}
+
 function severityBand(percent) {
   var value = finitePercent(percent)
   if (value === null || value < 50) return "low"

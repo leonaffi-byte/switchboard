@@ -331,7 +331,10 @@ Panel {
                     maximumLength: 32
                     selectByMouse: true
                     verticalPadding: Style.spacing.labelGap
-                    onTextEdited: root.saveDraft = text
+                    onTextEdited: {
+                      root.saveDraft = text
+                      if (root.svc) root.svc.saveConflictLabel = ""
+                    }
                   }
 
                   Button {
@@ -344,6 +347,59 @@ Panel {
                     enabled: !!root.svc && !root.svc.busy
                       && Model.validSaveLabel(root.saveDraft)
                     onClicked: root.svc.saveAccount(root.saveDraft)
+                  }
+                }
+              }
+
+              // Why Save is disabled: an invalid name. Shown only while the
+              // field is non-empty so the resting state stays quiet.
+              Text {
+                visible: !!root.svc && !!root.svc.unsavedEntry
+                  && root.saveDraft !== "" && !Model.validSaveLabel(root.saveDraft)
+                width: parent.width
+                wrapMode: Text.WordWrap
+                textFormat: Text.PlainText
+                text: "Name uses lowercase letters, digits, _ or - (for example: work)."
+                color: Color.muted
+                font.family: Style.font.family
+                font.pixelSize: Style.font.caption
+              }
+
+              // A save the backend refused because the slot holds a different
+              // login. Overwrite forces exactly that label; it disappears the
+              // moment the field is edited to a different name.
+              Item {
+                visible: !!root.svc && root.svc.saveConflictLabel !== ""
+                  && root.svc.saveConflictLabel === root.saveDraft
+                width: parent.width
+                height: visible ? Style.spacing.controlHeight : 0
+
+                Row {
+                  anchors.fill: parent
+                  spacing: Style.spacing.controlGap
+
+                  Text {
+                    id: conflictLabel
+                    anchors.verticalCenter: parent.verticalCenter
+                    width: parent.width - overwriteButton.implicitWidth - parent.spacing
+                    elide: Text.ElideRight
+                    textFormat: Text.PlainText
+                    text: "\u201c" + (root.svc ? root.svc.saveConflictLabel : "")
+                      + "\u201d holds a different login."
+                    color: Color.urgent
+                    font.family: Style.font.family
+                    font.pixelSize: Style.font.caption
+                  }
+
+                  Button {
+                    id: overwriteButton
+                    anchors.verticalCenter: parent.verticalCenter
+                    text: "Overwrite"
+                    fontSize: Style.font.caption
+                    horizontalPadding: Style.spacing.controlGap
+                    verticalPadding: Style.spacing.labelGap
+                    enabled: !!root.svc && !root.svc.busy
+                    onClicked: root.svc.saveAccountForce(root.saveDraft)
                   }
                 }
               }

@@ -57,6 +57,11 @@ Item {
   property string switchStdout: ""
   property string switchStderr: ""
   property string saveStdout: ""
+  // Label whose save the backend refused because the slot holds a different
+  // login (needs an explicit overwrite); "" when there is no pending conflict.
+  property string saveConflictLabel: ""
+  // The label of the in-flight save, so finishSave can attribute a conflict.
+  property string lastSaveLabel: ""
   property string renameStdout: ""
   property string renameStderr: ""
   property string saveStderr: ""
@@ -313,9 +318,24 @@ Item {
   function saveAccount(label) {
     if (!Model.validSaveLabel(label) || root.busy || resolvedBinary === "") return false
     statusError = ""
+    saveConflictLabel = ""
+    lastSaveLabel = String(label)
     saveStdout = ""
     saveStderr = ""
     if (!startBounded(saveProcess, "save", Model.backendCommand(resolvedBinary, ["account", "save", String(label)], 30, 65536, developerBackendActive ? null : resolvedSha256, backendEnvironment()))) return false
+    return true
+  }
+
+  // Replace a slot that holds a different login. Only offered by the panel
+  // after a save was refused for exactly this label (saveConflictLabel).
+  function saveAccountForce(label) {
+    if (!Model.validSaveLabel(label) || root.busy || resolvedBinary === "") return false
+    statusError = ""
+    saveConflictLabel = ""
+    lastSaveLabel = String(label)
+    saveStdout = ""
+    saveStderr = ""
+    if (!startBounded(saveProcess, "save", Model.backendCommand(resolvedBinary, ["account", "save", String(label), "--force"], 30, 65536, developerBackendActive ? null : resolvedSha256, backendEnvironment()))) return false
     return true
   }
 
@@ -491,11 +511,16 @@ Item {
     var boundedError = boundedCompletionError(exitCode, saveStdout,
       "account save", 30, 65536)
     if (boundedError === "" && Number(exitCode) === 0) {
+      saveConflictLabel = ""
       refreshQueued = true
       return
     }
     statusError = boundedError !== "" ? boundedError
       : failureMessage(exitCode, saveStderr, "account save failed")
+    // A differing-login refusal is recoverable with an explicit Overwrite;
+    // remember which label so the panel can offer it for that label only.
+    saveConflictLabel = (boundedError === "" && Model.isLineageConflict(saveStderr))
+      ? lastSaveLabel : ""
   }
 
   function renameAccount(oldLabel, newLabel) {

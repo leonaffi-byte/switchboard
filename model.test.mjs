@@ -605,7 +605,14 @@ test('manifest and QML retain the required plugin lifecycle contracts', () => {
   assert.match(service, /refreshIntervalSec = Model\.integerSetting\([^\n]*, 300, 60, 3600, 30\)/);
   assert.match(service, /\["notify-send", "-a", "Switchboard", "Claude auto-switch"/);
   assert.match(service, /Model\.alertDecisions\(parsed\.entries, alertArmedState,/);
-  assert.doesNotMatch(service, /--force/);
+  // Exactly one --force in the service: the deliberate Overwrite path
+  // (saveAccountForce), reached only from the panel after a lineage conflict;
+  // the plain saveAccount never forces.
+  assert.equal((service.match(/--force/g) || []).length, 1);
+  assert.match(service, /function saveAccountForce\(label\)[\s\S]*?\["account", "save", String\(label\), "--force"\]/);
+  const plainSave = service.slice(service.indexOf('function saveAccount(label)'),
+    service.indexOf('function saveAccountForce'));
+  assert.doesNotMatch(plainSave, /--force/);
   assert.equal((service.match(/root\.completionsPending\+\+/g) || []).length, 8);
   assert.equal((service.match(/root\.completionsPending--/g) || []).length, 1);
 
@@ -634,6 +641,12 @@ test('manifest and QML retain the required plugin lifecycle contracts', () => {
   assert.match(panel, /property bool settingsOpen:\s*false/);
   assert.match(panel, /text:\s*"‹ back"/);
   assert.match(panel, /stepSize:\s*30/);
+  // Overwrite affordance for a save the backend refused (differing login):
+  // gated on the exact refused label, forces only that label, clears on edit.
+  assert.match(panel, /root\.svc\.saveConflictLabel !== ""[\s\S]{0,80}?saveConflictLabel === root\.saveDraft/);
+  assert.match(panel, /onClicked:\s*root\.svc\.saveAccountForce\(root\.saveDraft\)/);
+  assert.match(panel, /onTextEdited:\s*\{[\s\S]*?root\.svc\.saveConflictLabel = ""/);
+  assert.match(panel, /Name uses lowercase letters/);
   const mainRows = panel.slice(panel.indexOf('component ClaudeAccountRow'),
     panel.indexOf('component ProviderKeyRow'));
   assert.doesNotMatch(mainRows, /wrapMode:\s*Text\.WordWrap/);
@@ -688,7 +701,7 @@ test('every service process is bounded and stopped during destruction', () => {
   const commandProperties = service.match(/^\s*command:\s*\[\]\s*$/gm) || [];
   assert.equal(commandProperties.length, 8);
   assert.equal((service.match(/Process\.command\s*=\s*Model\.backendCommand\(/g) || []).length, 1);
-  assert.equal((service.match(/startBounded\([a-zA-Z]+Process, "[a-zA-Z]+", Model\.backendCommand\(/g) || []).length, 8);
+  assert.equal((service.match(/startBounded\([a-zA-Z]+Process, "[a-zA-Z]+", Model\.backendCommand\(/g) || []).length, 9);
   assert.doesNotMatch(service, /Process\.command\s*=\s*\[/);
   assert.doesNotMatch(service, /\["\/usr\/bin\/env",\s*resolvedBinary/);
   assert.match(service, /Model\.backendCommand\(selection\.path, \["--version"\], 5, 4096,/);
@@ -975,6 +988,20 @@ test('environment cannot subvert the wrapper: env -i allow-list, BASH_ENV, LD_PR
   }
   assert.equal(model.validSaveLabel('a-b'), true);
   await fsp.rm(dir, {recursive: true, force: true});
+});
+
+test('isLineageConflict recognises the differing-login save refusal only', () => {
+  const refusal = 'ai-usagebar account save: credentials error: refusing to overwrite '
+    + 'existing flat Claude account "personal": its credential lineage differs from '
+    + 'the live login; pass `--force` to replace it';
+  assert.equal(model.isLineageConflict(refusal), true);
+  // Unrelated failures must not offer Overwrite.
+  assert.equal(model.isLineageConflict('ai-usagebar account save: credentials error: '
+    + 'invalid flat account label "Bad Label": use [a-z0-9_-]+'), false);
+  assert.equal(model.isLineageConflict('ai-usagebar not found'), false);
+  assert.equal(model.isLineageConflict(''), false);
+  assert.equal(model.isLineageConflict(null), false);
+  assert.equal(model.isLineageConflict(undefined), false);
 });
 
 test('bash never sources startup files, even when the caller hands it socket stdio', async () => {
