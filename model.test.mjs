@@ -976,3 +976,24 @@ test('environment cannot subvert the wrapper: env -i allow-list, BASH_ENV, LD_PR
   assert.equal(model.validSaveLabel('a-b'), true);
   await fsp.rm(dir, {recursive: true, force: true});
 });
+
+test('bash never sources startup files, even when the caller hands it socket stdio', async () => {
+  const {spawnSync} = await import('node:child_process');
+  const fsp = await import('node:fs/promises');
+  const os = await import('node:os');
+  const path = await import('node:path');
+  const crypto = await import('node:crypto');
+  const dir = await fsp.mkdtemp(path.join(os.tmpdir(), 'sb-rc-'));
+  const backend = path.join(dir, 'backend');
+  await fsp.writeFile(backend, '#!/usr/bin/bash\nprintf "%s|%s" "$PATH" "${SB_RC_MARKER:-none}"\n', {mode: 0o755});
+  const sha = crypto.createHash('sha256').update(await fsp.readFile(backend)).digest('hex');
+  const home = path.join(dir, 'home'); await fsp.mkdir(home);
+  await fsp.writeFile(path.join(home, '.bashrc'), 'export SB_RC_MARKER=sourced\nexport PATH="$PATH:/rc-added"\n');
+  const argv = model.backendCommand(backend, [], 5, 4096, sha, ['PATH=/usr/bin', 'HOME=' + home]);
+  assert.ok(argv.includes('--norc') && argv.includes('--noprofile'));
+  // node's spawnSync gives the child socketpair stdio — the case where bash would read ~/.bashrc
+  const r = spawnSync(argv[0], argv.slice(1), {encoding: 'utf8', env: {}});
+  assert.equal(r.status, 0, r.stderr);
+  assert.equal(r.stdout, '/usr/bin|none');
+  await fsp.rm(dir, {recursive: true, force: true});
+});
