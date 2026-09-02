@@ -33,7 +33,7 @@ function utf8ByteLength(text) {
 }
 
 // The reviewed, pinned backend release (leonaffi-byte/ai-usagebar tag v1.9.1-whkey.2).
-var BACKEND_SHA256 = "c965aec224f01d2802b1ef14488df0d6d0373c6593d5d1af19c6983375c5a5e7"
+var BACKEND_SHA256 = "b2134dc1a9bc8ef899d7da63f880fc05268bc05ca0f1fe306f4a11bae35b61ad"
 var TRUSTED_BACKEND_SUBPATH = "/.local/share/switchboard/backend/ai-usagebar"
 // Release binding: leonaffi-byte/ai-usagebar tag v1.9.1-whkey.2, asset
 // ai-usagebar-x86_64-unknown-linux-gnu; SHA256SUMS in that release. Bumping the

@@ -17,20 +17,26 @@ executes the backend from one trusted location, after verifying it:
 ```bash
 mkdir -p ~/.local/share/switchboard/backend
 cd ~/.local/share/switchboard/backend
-curl -fsSLO https://github.com/leonaffi-byte/ai-usagebar/releases/download/v1.9.1-whkey.2/ai-usagebar-x86_64-unknown-linux-gnu
-curl -fsSLO https://github.com/leonaffi-byte/ai-usagebar/releases/download/v1.9.1-whkey.2/SHA256SUMS
+tag=v1.9.1-whkey.3
+curl -fsSLO https://github.com/leonaffi-byte/ai-usagebar/releases/download/$tag/ai-usagebar-x86_64-unknown-linux-gnu
+curl -fsSLO https://github.com/leonaffi-byte/ai-usagebar/releases/download/$tag/SHA256SUMS
 sha256sum -c SHA256SUMS          # must print: ai-usagebar-x86_64-unknown-linux-gnu: OK
+gh attestation verify ai-usagebar-x86_64-unknown-linux-gnu --repo leonaffi-byte/ai-usagebar   # optional: signed provenance
 install -m 0755 ai-usagebar-x86_64-unknown-linux-gnu ai-usagebar
 ```
 
 Expected SHA-256 of the release binary (also embedded in the plugin):
-`c965aec224f01d2802b1ef14488df0d6d0373c6593d5d1af19c6983375c5a5e7`
+`b2134dc1a9bc8ef899d7da63f880fc05268bc05ca0f1fe306f4a11bae35b61ad`
 
-The release is built from commit `41321cc7c29bc574fcc94e92d48fec74a475998c`
-(tag `v1.9.1-whkey.2`) with `cargo build --release --locked`; see the release
-notes for the toolchain. The plugin refuses to run any other binary at that path
-(see [Trusted execution](#trusted-execution)). Building the backend yourself is
-supported only through the developer override described there.
+The release is built by GitHub Actions from the exact tagged commit
+(`34a9fd4df62231264ccbb97af116dbdf5edcc9cd`, tag `v1.9.1-whkey.3`) with the toolchain pinned in
+`rust-toolchain.toml` (Rust 1.98.0), `cargo build --release --locked`, remapped
+paths and no incremental compilation. Two independent runners must produce a
+byte-identical binary before anything is published, and a signed GitHub build
+provenance attestation ties the asset digest to that commit — see
+[Backend provenance and audit guide](#backend-provenance-and-audit-guide).
+Building the backend yourself is supported only through the developer override
+described under [Trusted execution](#trusted-execution).
 
 The fork auto-enables Kimi and SuperGrok when their CLI logins exist (set
 `enabled = false` in `~/.config/ai-usagebar/config.toml` to opt out), and
@@ -150,19 +156,27 @@ the last-known compact status line remain available.
 Switchboard's install instructions pin the backend to one immutable commit so
 that what a reviewer audits is what users execute.
 
-- **Pinned revision:** `41321cc7c29bc574fcc94e92d48fec74a475998c`
-  (annotated tag `v1.9.1-whkey.2` on https://github.com/leonaffi-byte/ai-usagebar).
-- **Reproducible build:** that revision commits `Cargo.lock`; `--locked` makes
-  `cargo install` refuse any dependency drift, so the build is fully determined
-  by the revision.
-- **Release artifact:** `v1.9.1-whkey.2` on GitHub ships the binary the plugin
-  executes plus `SHA256SUMS`; the plugin embeds that SHA-256 and verifies the
+- **Pinned revision:** `34a9fd4df62231264ccbb97af116dbdf5edcc9cd` (annotated tag `v1.9.1-whkey.3` on
+  https://github.com/leonaffi-byte/ai-usagebar).
+- **Reproducible build:** `.github/workflows/plugin-backend-release.yml` builds the
+  tagged commit on two independent `ubuntu-24.04` runners with the toolchain pinned
+  by `rust-toolchain.toml` (Rust 1.98.0), `cargo build --release --locked`,
+  `--remap-path-prefix` for the workspace, cargo home and rustup home,
+  `CARGO_INCREMENTAL=0`, `SOURCE_DATE_EPOCH=0`; the release is published only if
+  both binaries are byte-identical. `BUILD-INFO.txt` in the release records the
+  commit, toolchain and flags. To reproduce elsewhere, run the same steps in an
+  `ubuntu:24.04` container with the checkout at `/home/runner/work/ai-usagebar/ai-usagebar`.
+- **Signed attestation:** `actions/attest-build-provenance` signs the asset digest
+  for that commit; verify with
+  `gh attestation verify ai-usagebar-x86_64-unknown-linux-gnu --repo leonaffi-byte/ai-usagebar`.
+- **Release artifact:** `v1.9.1-whkey.3` ships the binary the plugin executes plus
+  `SHA256SUMS` and `BUILD-INFO.txt`; the plugin embeds that SHA-256 and verifies the
   file before every execution.
 - **Update policy:** the pin and the embedded hash only change through a new
   Switchboard commit; the plugin never fetches, updates, or executes any other
   source.
-- **Verify what you built:** `cargo install --list` shows the installed
-  revision; `git -C <clone> rev-parse HEAD` against the tag confirms it.
+- **Verify what you installed:** `sha256sum ~/.local/share/switchboard/backend/ai-usagebar`
+  must print the digest above.
 
 All file references below are at the pinned revision.
 
