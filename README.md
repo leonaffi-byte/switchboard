@@ -18,7 +18,7 @@ after verifying it:
 ```bash
 mkdir -p ~/.local/share/switchboard/backend
 cd ~/.local/share/switchboard/backend
-tag=v1.9.1-whkey.3
+tag=v1.9.1-whkey.4
 curl -fsSLO https://github.com/leonaffi-byte/ai-usagebar/releases/download/$tag/ai-usagebar-x86_64-unknown-linux-gnu
 curl -fsSLO https://github.com/leonaffi-byte/ai-usagebar/releases/download/$tag/SHA256SUMS
 sha256sum -c SHA256SUMS          # must print: ai-usagebar-x86_64-unknown-linux-gnu: OK
@@ -27,10 +27,10 @@ install -m 0755 ai-usagebar-x86_64-unknown-linux-gnu ai-usagebar
 ```
 
 Expected SHA-256 of the release binary (also embedded in the plugin):
-`b2134dc1a9bc8ef899d7da63f880fc05268bc05ca0f1fe306f4a11bae35b61ad`
+`94573a090d08f5ec460341897ac54652d0d4750687adc120b1185d30c25129a2`
 
 The release is built by GitHub Actions from the exact tagged commit
-(`34a9fd4df62231264ccbb97af116dbdf5edcc9cd`, tag `v1.9.1-whkey.3`) with the toolchain pinned in
+(`1ec3eb305c90633881e43f7a7ce12c28694481c7`, tag `v1.9.1-whkey.4`) with the toolchain pinned in
 `rust-toolchain.toml` (Rust 1.98.0), `cargo build --release --locked`, remapped
 paths and no incremental compilation. Two independent runners must produce a
 byte-identical binary before anything is published, and a signed GitHub build
@@ -179,7 +179,7 @@ the last-known compact status line remain available.
 Switchboard's install instructions pin the backend to one immutable commit so
 that what a reviewer audits is what users execute.
 
-- **Pinned revision:** `34a9fd4df62231264ccbb97af116dbdf5edcc9cd` (annotated tag `v1.9.1-whkey.3` on
+- **Pinned revision:** `1ec3eb305c90633881e43f7a7ce12c28694481c7` (annotated tag `v1.9.1-whkey.4` on
   https://github.com/leonaffi-byte/ai-usagebar).
 - **Reproducible build:** `.github/workflows/plugin-backend-release.yml` builds the
   tagged commit on two independent `ubuntu-24.04` runners with the toolchain pinned
@@ -192,7 +192,7 @@ that what a reviewer audits is what users execute.
 - **Signed attestation:** `actions/attest-build-provenance` signs the asset digest
   for that commit; verify with
   `gh attestation verify ai-usagebar-x86_64-unknown-linux-gnu --repo leonaffi-byte/ai-usagebar`.
-- **Release artifact:** `v1.9.1-whkey.3` ships the binary the plugin executes plus
+- **Release artifact:** `v1.9.1-whkey.4` ships the binary the plugin executes plus
   `SHA256SUMS` and `BUILD-INFO.txt`; the plugin embeds that SHA-256 and verifies the
   file before every execution.
 - **Update policy:** the pin and the embedded hash only change through a new

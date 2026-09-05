@@ -32,10 +32,10 @@ function utf8ByteLength(text) {
   }
 }
 
-// The reviewed, pinned backend release (leonaffi-byte/ai-usagebar tag v1.9.1-whkey.3).
-var BACKEND_SHA256 = "b2134dc1a9bc8ef899d7da63f880fc05268bc05ca0f1fe306f4a11bae35b61ad"
+// The reviewed, pinned backend release (leonaffi-byte/ai-usagebar tag v1.9.1-whkey.4).
+var BACKEND_SHA256 = "94573a090d08f5ec460341897ac54652d0d4750687adc120b1185d30c25129a2"
 var TRUSTED_BACKEND_SUBPATH = "/.local/share/switchboard/backend/ai-usagebar"
-// Release binding: leonaffi-byte/ai-usagebar tag v1.9.1-whkey.3, asset
+// Release binding: leonaffi-byte/ai-usagebar tag v1.9.1-whkey.4, asset
 // ai-usagebar-x86_64-unknown-linux-gnu; SHA256SUMS in that release. Bumping the
 // backend means a new release, a new BACKEND_SHA256 here, and the README hash.
 
