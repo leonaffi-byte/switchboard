@@ -32,10 +32,10 @@ function utf8ByteLength(text) {
   }
 }
 
-// The reviewed, pinned backend release (leonaffi-byte/ai-usagebar tag v1.9.1-whkey.2).
+// The reviewed, pinned backend release (leonaffi-byte/ai-usagebar tag v1.9.1-whkey.3).
 var BACKEND_SHA256 = "b2134dc1a9bc8ef899d7da63f880fc05268bc05ca0f1fe306f4a11bae35b61ad"
 var TRUSTED_BACKEND_SUBPATH = "/.local/share/switchboard/backend/ai-usagebar"
-// Release binding: leonaffi-byte/ai-usagebar tag v1.9.1-whkey.2, asset
+// Release binding: leonaffi-byte/ai-usagebar tag v1.9.1-whkey.3, asset
 // ai-usagebar-x86_64-unknown-linux-gnu; SHA256SUMS in that release. Bumping the
 // backend means a new release, a new BACKEND_SHA256 here, and the README hash.
 
@@ -231,8 +231,50 @@ function normalizeEntry(raw) {
     active: raw.active === true ? true : raw.active === false ? false : null,
     account_label: autoTextSafe(raw.account_label, 120).trim(),
     login_unsaved: raw.login_unsaved === true,
+    // Identity fields (backend >= whkey.4). Each is whitelisted or validated
+    // here; an absent or malformed value is "" and never invents a state.
+    login_state: loginStateValue(raw.login_state),
+    login_email: emailValue(raw.login_email),
+    login_conflict_label: labelValue(raw.login_conflict_label),
+    login_conflict_email: emailValue(raw.login_conflict_email),
+    login_matches_label: labelValue(raw.login_matches_label),
+    identity_check: identityCheckValue(raw.identity_check),
+    account_email: emailValue(raw.account_email),
     sections: sections
   }
+}
+
+var LOGIN_STATES = ["saved", "rotated", "unmanaged", "unsaved", "unverified"]
+var IDENTITY_CHECKS = ["deferred", "unavailable"]
+
+function loginStateValue(value) {
+  var text = cleanText(value, 40).trim()
+  return LOGIN_STATES.indexOf(text) >= 0 ? text : ""
+}
+
+function identityCheckValue(value) {
+  var text = cleanText(value, 40).trim()
+  return IDENTITY_CHECKS.indexOf(text) >= 0 ? text : ""
+}
+
+function labelValue(value) {
+  var text = cleanText(value, 64).trim()
+  return validAccountLabel(text) ? text : ""
+}
+
+// One address, no whitespace, at most 120 characters; anything else is "".
+function emailValue(value) {
+  var text = autoTextSafe(value, 120).trim()
+  return /^[^\s@]+@[^\s@]+$/.test(text) ? text : ""
+}
+
+// The live login's state. Reports from a backend without `login_state` map
+// their `login_unsaved` flag onto the same vocabulary.
+function loginState(entry) {
+  if (!entry) return "saved"
+  var state = loginStateValue(entry.login_state)
+  if (state !== "") return state
+  return entry.login_unsaved === true ? "unsaved" : "saved"
 }
 
 function parseReport(raw) {
@@ -431,11 +473,176 @@ function unsavedLoginEntry(entries) {
   return null
 }
 
-function suggestedSaveLabel(entry) {
-  var plan = entry && entry.plan !== undefined && entry.plan !== null ? String(entry.plan) : ""
-  var label = plan.toLowerCase().replace(/[^a-z0-9_-]/g, "")
-  if (label.length > 20) label = label.slice(0, 20)
-  return label === "" ? "main" : label
+function defaultClaudeEntry(entries) {
+  var source = listOf(entries)
+  for (var i = 0; i < source.length; i++)
+    if (source[i] && String(source[i].id || "") === "anthropic") return source[i]
+  return null
+}
+
+// The live login is a different account than the active marker's saved copy.
+// Switching is held until the user saves it elsewhere or replaces the marker.
+function loginConflict(entries) {
+  var entry = defaultClaudeEntry(entries)
+  if (!entry || loginState(entry) !== "unsaved") return null
+  return labelValue(entry.login_conflict_label) !== "" ? entry : null
+}
+
+// The backend could not yet prove that the live login still belongs to the
+// active marker; nothing is written until it can, or the user decides.
+function unverifiedLogin(entries) {
+  var entry = defaultClaudeEntry(entries)
+  return entry && loginState(entry) === "unverified" ? entry : null
+}
+
+// The marker label a Replace/Update would overwrite: the conflicting saved
+// account, or the marker whose login could not be verified. "" otherwise.
+function replaceTargetLabel(entry) {
+  if (!entry || String(entry.id || "") !== "anthropic") return ""
+  var state = loginState(entry)
+  if (state === "unsaved") return labelValue(entry.login_conflict_label)
+  if (state === "unverified") return labelValue(entry.account_label)
+  return ""
+}
+
+// Which affordance the panel's live-login block shows:
+//   "save"       unmanaged login (or a legacy report): plain Save
+//   "matches"    the login is a saved account already: Save re-syncs it
+//   "conflict"   a different account than the marker: Save as new / Replace
+//   "unverified" the check gave up: It's X – update / Save as new
+//   ""           nothing to do (saved, rotated, still verifying)
+function loginRowState(entry) {
+  if (!entry || String(entry.id || "") !== "anthropic") return ""
+  var state = loginState(entry)
+  if (state === "unverified")
+    return entry.identity_check === "unavailable" && replaceTargetLabel(entry) !== ""
+      ? "unverified" : ""
+  if (state !== "unsaved" && state !== "unmanaged") return ""
+  if (state === "unsaved" && labelValue(entry.login_conflict_label) !== "") return "conflict"
+  if (state === "unsaved" && labelValue(entry.login_matches_label) !== "") return "matches"
+  return "save"
+}
+
+function quoted(label) {
+  return "\u201c" + autoTextSafe(label, 64) + "\u201d"
+}
+
+// Line 1 of the conflict block: who is live, and which saved account it is not.
+function conflictCaption(entry) {
+  if (!entry) return ""
+  var email = emailValue(entry.login_email)
+  var slotEmail = emailValue(entry.login_conflict_email)
+  return "Logged in as " + (email !== "" ? email : "a different account")
+    + " \u2014 not " + quoted(entry.login_conflict_label)
+    + (slotEmail !== "" ? " (" + slotEmail + ")" : "")
+}
+
+function matchesCaption(entry) {
+  if (!entry) return ""
+  return "login matches saved account " + quoted(entry.login_matches_label)
+}
+
+// Confirm text under Replace: names what is forgotten.
+function replaceCaption(entry) {
+  if (!entry) return ""
+  var slotEmail = emailValue(entry.login_conflict_email)
+  return "This forgets " + quoted(entry.login_conflict_label) + " ("
+    + (slotEmail !== "" ? slotEmail : "saved login") + ")."
+}
+
+// Unverified and the automatic check gave up: name the live login when it is
+// known, so the user confirms "it's X" against a real address, not blindly.
+function unverifiedCaption(entry) {
+  if (!entry) return ""
+  var email = emailValue(entry.login_email)
+  var marker = quoted(entry.account_label)
+  if (email !== "") return "Logged in as " + email + " \u2014 can't verify it's still " + marker
+  return "can't verify the login is still " + marker
+}
+
+function unverifiedConfirmCaption(entry) {
+  if (!entry) return ""
+  var email = emailValue(entry.login_email)
+  var marker = quoted(entry.account_label)
+  if (email !== "") return "If " + email + " is not " + marker + ", " + marker + " is lost."
+  return "If this login is a different account, " + marker + " is lost."
+}
+
+// Quiet one-line note under the active row while the backend is still
+// verifying, or after it has verified a rotation it could not yet write back.
+function liveLoginCaption(entry) {
+  if (!entry || String(entry.id || "") !== "anthropic") return ""
+  var state = loginState(entry)
+  if (state === "rotated") return "saved copy updates on next check"
+  if (state === "unverified" && entry.identity_check !== "unavailable") {
+    var email = emailValue(entry.login_email)
+    return "verifying login\u2026 saved copy updates on next check"
+      + (email !== "" ? " (" + email + ")" : "")
+  }
+  return ""
+}
+
+// Labels a suggested save name must not collide with: every saved row, the
+// active marker, and the conflicting saved account.
+function savedLabels(entries) {
+  var source = listOf(entries)
+  var labels = []
+  function add(label) {
+    var text = labelValue(label)
+    if (text !== "" && labels.indexOf(text) < 0) labels.push(text)
+  }
+  for (var i = 0; i < source.length; i++) {
+    var entry = source[i]
+    if (!entry || !isClaudeEntry(entry)) continue
+    add(switchLabel(entry))
+    if (isActiveEntry(entry)) add(entry.account_label)
+    if (String(entry.id || "") === "anthropic") add(entry.login_conflict_label)
+  }
+  return labels
+}
+
+// Used only by the default row and the live-login block; every value is
+// shaped by this file so the same key drives the draft-reset logic in QML.
+function saveDraftKey(entry) {
+  if (!entry) return ""
+  return [String(entry.id || ""), String(entry.plan || ""), loginState(entry),
+    emailValue(entry.login_email), labelValue(entry.login_conflict_label),
+    labelValue(entry.login_matches_label)].join("|")
+}
+
+function labelFromText(text) {
+  var label = String(text === undefined || text === null ? "" : text)
+    .toLowerCase().replace(/[^a-z0-9_-]/g, "").replace(/^[_-]+/, "")
+  return label.length > 20 ? label.slice(0, 20) : label
+}
+
+function emailLocalLabel(email) {
+  var text = emailValue(email)
+  var at = text.indexOf("@")
+  return at <= 0 ? "" : labelFromText(text.slice(0, at))
+}
+
+function uniqueLabel(label, existingLabels) {
+  var taken = listOf(existingLabels)
+  if (taken.indexOf(label) < 0) return label
+  for (var n = 2; n < 100; n++) {
+    var suffix = "-" + n
+    var candidate = label.slice(0, 20 - suffix.length) + suffix
+    if (taken.indexOf(candidate) < 0) return candidate
+  }
+  return label
+}
+
+// The saved account the live login already matches wins (Save re-syncs it);
+// otherwise the e-mail's local part, then the plan, then "main" — suffixed
+// -2, -3, … when a different saved account already uses the name.
+function suggestedSaveLabel(entry, existingLabels) {
+  var matches = entry ? labelValue(entry.login_matches_label) : ""
+  if (matches !== "") return matches
+  var label = entry ? emailLocalLabel(entry.login_email) : ""
+  if (label === "") label = labelFromText(entry ? entry.plan : "")
+  if (label === "") label = "main"
+  return uniqueLabel(label, existingLabels)
 }
 
 function validSaveLabel(text) {
@@ -557,6 +764,15 @@ function renameLabel(entry) {
   return validSaveLabel(stored) ? stored : null
 }
 
+// The e-mail the backend learned for a Claude row: saved rows carry their
+// slot's address, the live row the live login's. "" when unknown.
+function claudeEntryEmail(entry) {
+  if (!entry || !isClaudeEntry(entry)) return ""
+  var id = String(entry.id || "")
+  if (id.indexOf("anthropic@") === 0) return emailValue(entry.account_email)
+  return id === "anthropic" ? emailValue(entry.login_email) : ""
+}
+
 // Hover detail for a row: every metric with its FULL label on its own line,
 // then health/text rows, then a stale/error note. The compact captions
 // truncate labels for the one-line footer; a tooltip has room and must not.
@@ -565,7 +781,8 @@ function entryTooltip(entry, nowMs) {
   var lines = []
   var name = isClaudeEntry(entry) ? claudeEntryName(entry) : agentEntryName(entry)
   var plan = autoTextSafe(entry.plan, 120).trim()
-  lines.push(plan !== "" ? name + " · " + plan : name)
+  var email = claudeEntryEmail(entry)
+  lines.push((plan !== "" ? name + " · " + plan : name) + (email !== "" ? " · " + email : ""))
 
   var metrics = metricSections(entry)
   for (var i = 0; i < metrics.length && lines.length < 10; i++) {
@@ -890,6 +1107,7 @@ function autoSwitchDecision(entries, opts) {
     return { action: "none", reason: "no-fresh-data" }
 
   if (unsavedLoginEntry(source)) return { action: "none", reason: "unsaved-login" }
+  if (unverifiedLogin(source)) return { action: "none", reason: "login-unverified" }
 
   var threshold = Number(options.threshold)
   if (!isFinite(threshold)) threshold = 85

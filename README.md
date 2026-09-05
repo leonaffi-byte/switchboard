@@ -10,9 +10,10 @@ with AI Usage Bar.
 ## Requirements
 
 Switchboard is a frontend for a pinned, hash-verified release of the `ai-usagebar`
-**fork** (flat Claude account management: save, switch, rename, marker-trusted
-resync, and the report fields this plugin renders). The plugin only ever
-executes the backend from one trusted location, after verifying it:
+**fork** (flat Claude account management: save, switch, rename, an identity-gated
+resync of the active account's saved copy, and the report fields this plugin
+renders). The plugin only ever executes the backend from one trusted location,
+after verifying it:
 
 ```bash
 mkdir -p ~/.local/share/switchboard/backend
@@ -78,11 +79,29 @@ colors come directly from that theme.
 
 The dashboard is one screen with these sections:
 
-- `CLAUDE`: one compact line and meter per account. Only the active row adds a
-  caption with its 5-hour and 7-day windows and relative reset times. An
-  unmanaged default login gets a validated inline Save field. Rows backed by a
-  saved account offer an inline rename (pencil, validated, Esc cancels), and a
-  one-line hint explains how to add a second account until two exist.
+- `CLAUDE`: one compact line and meter per account, with the account's e-mail
+  beside the name once the backend has learned it. Only the active row adds a
+  caption with its 5-hour and 7-day windows and relative reset times. Rows
+  backed by a saved account offer an inline rename (pencil, validated, Esc
+  cancels), and a one-line hint explains how to add a second account until two
+  exist. Below the rows, one state-driven block follows the backend's
+  `login_state` for the live login:
+  - *unmanaged*: a validated inline Save field (also what reports from an
+    older backend get).
+  - *unsaved, matching a saved account*: the field is pre-filled with that
+    account and Save re-syncs it (the backend verified it is the same login).
+  - *unsaved, a different account than the active marker*: the line names both
+    logins (`Logged in as b@… — not “leoleo” (a@…)`), Save as new saves the
+    live login under a fresh name, and `Replace “leoleo”…` opens a second step
+    that spells out what is forgotten before Replace runs. Until one of them
+    happens, switching to a saved account is held (the outgoing login would be
+    re-saved over the wrong slot) and the rows say so in their tooltip.
+  - *unverified*: while the backend is still checking, only a quiet
+    `verifying login…` note appears under the active row; once it gives up
+    (`identity_check: unavailable`) the block names the live login and offers
+    `It's “leoleo” – update` (second step: `If b@… is not “leoleo”, “leoleo”
+    is lost.` → Update) and `Save as new…`.
+  - *rotated*: a `saved copy updates on next check` note under the active row.
 - `AGENTS`: one line and meter per other agent. Metric details move to row
   tooltips; key failures become a compact `needs key →` link into settings.
 - `AUTO-SWITCH`: a persistent toggle, a live explanation naming the active
@@ -105,14 +124,18 @@ through their own CLIs.
 Auto-switch is evaluated once after each successfully parsed report. It
 only acts when the active Claude account has a ready, non-cached 5-hour value at
 or above the configured threshold. An unsaved default login prevents automatic
-switching.
+switching, and so does a login the backend has not yet verified as the active
+account's (`login_state: unverified`): switching would re-save it into a slot
+the backend cannot prove is its own.
 
 Eligible destinations must be saved, explicitly switchable accounts with ready,
 non-cached data and a 5-hour value at least 10 points below the threshold. The
 lowest-usage account wins; equal values are ordered by account label. Every
 successful manual or automatic switch starts one shared 10-minute cooldown.
 An automatic refusal also starts the cooldown so a backend safety guard is not
-hammered. Switchboard never passes `--force`.
+hammered. Switches and toggles never pass `--force`; the only `--force` the
+plugin ever sends is `account save <label> --force` behind the explicit
+Replace / Update / Overwrite confirmations described under Dashboard.
 
 Automatic success triggers one desktop notification and a report refresh. The
 last automatic success or failure remains in the card for the shell session;
@@ -180,33 +203,49 @@ that what a reviewer audits is what users execute.
 
 All file references below are at the pinned revision.
 
-### Credential-file safety (`src/anthropic/flat_accounts.rs`)
+### Credential-file safety (`src/anthropic/flat_accounts.rs`, `src/anthropic/identity.rs`)
 
 Saved accounts live in `~/.claude/accounts/<label>.credentials.json` with an
 `active.txt` marker; the live login is `~/.claude/.credentials.json`.
 
-- Every mutation runs under an exclusive `flock` on `.switch.lock` (line 22)
-  and validates the target before touching anything (`preflight_target`,
-  line 509; labels must match `[a-z0-9_-]{1,32}` and pass the config validator).
-- `switch_under_lock` (line 250) is journaled: it writes `.switch.journal`
-  (lines 21, 48 — hashes only, never tokens), re-saves the outgoing login into
-  its slot, installs the target, updates the marker, then removes the journal.
+- Every mutation runs under an exclusive `flock` on `.switch.lock` and
+  validates the target before touching anything (`preflight_target`; labels
+  must match `[a-z0-9_-]{1,32}` and pass the config validator).
+- `switch_under_lock` is journaled: it writes `.switch.journal` (hashes only,
+  never tokens), re-saves the outgoing login into its slot, installs the
+  target, updates the marker, then removes the journal.
 - Every write is atomic (temp file + rename) with mode `0600`
-  (`atomic_write_private`, line 745); directories are created `0700`
-  (`create_private_dir`, line 734).
-- Guards refuse to overwrite an unmanaged live login or a slot whose credential
-  lineage does not match (`--force` is never passed by the plugin).
+  (`atomic_write_private`); directories are created `0700`
+  (`create_private_dir`).
+- A slot's bytes are replaced only by a same-lineage write (the refresh
+  write-back, or `save` when the live refresh token is the slot's), by a write
+  whose identity verdict is *same account* re-verified under the lock, or by an
+  explicit `account save <label> --force`. The verdict comes from
+  `identity::verdict`: an identity store (`~/.cache/ai-usagebar/anthropic/identities.json`,
+  mode `0600`, keyed by the SHA-256 of each token, never containing token
+  material) that records the account and organization UUID the server returned
+  for exactly that token — from the token endpoint on refresh and from
+  `GET /api/oauth/profile`. Unknown lineages are *unverified*: nothing is
+  written, the report says so (`login_state`, `identity_check`), and the plugin
+  asks the user. `~/.claude.json` is never read as a decision input; after a
+  switch the backend only merges the target's identity into its `oauthAccount`
+  so Claude Code's own display catches up.
+- Guards refuse to overwrite an unmanaged live login and any slot whose login
+  the store cannot prove is the same account. The plugin passes `--force` only
+  on `account save`, behind the explicit Replace / Update / Overwrite
+  confirmations; switch and toggle never carry it.
 
 ### Locking and rollback
 
-- `recover_under_lock` (line 383) resolves an interrupted switch on the next
-  mutation: live matches the target → finish; live still matches the outgoing
-  slot → discard the journal; anything else → refuse and tell the user.
-- `account switch --dry-run` (`validate_switch`, line 453) runs the same
-  checks read-only.
-- Marker-trusted resync (line 360) rewrites only the marker's own slot from the
-  live file, under the same lock, and only when the live credential matches no
-  other saved account.
+- `recover_under_lock` resolves an interrupted switch on the next mutation:
+  live matches the target → finish; live still matches the outgoing slot →
+  discard the journal; anything else → refuse and tell the user.
+- `account switch --dry-run` (`validate_switch`) runs the same checks
+  read-only.
+- The same-account resync (`resync_marker_same_account_under_lock`) rewrites
+  only the marker's own slot from the live file, under the same lock, and only
+  after the identity verdict is re-checked inside it; a different or unknown
+  login is never written back.
 
 ### Stdin-only secrets (`src/tui/settings.rs`)
 
@@ -276,7 +315,12 @@ never surface another account's data.
 
 Switchboard spawns exactly two programs: `ai-usagebar` (subcommands
 `usage --json`, `account save|switch|toggle|rename`, `settings show|apply`) and
-`notify-send`. Every invocation goes through one fixed, positional bash wrapper
+`notify-send`. From `usage --json` the plugin reads, per entry, the additive
+report fields `login_state` (`saved|rotated|unmanaged|unsaved|unverified`),
+`login_unsaved`, `login_email`, `login_conflict_label`, `login_conflict_email`,
+`login_matches_label`, `identity_check` (`deferred|unavailable`) and, on saved
+rows, `account_email`; every value is whitelisted or validated in `Model.js`
+before it reaches a view, and a missing field never invents a state. Every invocation goes through one fixed, positional bash wrapper
 (`backendCommand` in `Model.js`; the binary and arguments travel as `"$@"` and are
 never spliced into the script). The wrapper `exec`s into coreutils
 `timeout --kill-after=5`, which runs the command in its own process group: on the

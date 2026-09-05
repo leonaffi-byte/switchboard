@@ -29,6 +29,18 @@ Panel {
   property string settingsValidationError: ""
   property double nowMs: Date.now()
 
+  // Live-login block state (see Model.loginRowState): the entry it describes,
+  // which affordance it shows, and the label a Replace/Update would overwrite.
+  readonly property var loginEntry: svc ? (svc.unsavedEntry || svc.unverifiedLogin) : null
+  readonly property string loginRow: Model.loginRowState(loginEntry)
+  readonly property string replaceTarget: Model.replaceTargetLabel(loginEntry)
+  readonly property bool confirmShown: !!svc && replaceTarget !== ""
+    && svc.replaceConfirmLabel === replaceTarget
+  // "Save as new…" in the unverified state reveals the field on demand.
+  property bool saveAsNewOpen: false
+  readonly property bool saveFieldShown: loginRow === "save" || loginRow === "matches"
+    || loginRow === "conflict" || (loginRow === "unverified" && saveAsNewOpen)
+
   function switchPanel(direction) {
     if (bar && typeof bar.switchPanelFrom === "function")
       return bar.switchPanelFrom(barIdentity, direction)
@@ -40,17 +52,19 @@ Panel {
   }
 
   function syncSaveDraft() {
-    var entry = svc ? svc.unsavedEntry : null
+    var entry = loginEntry
     if (!entry) {
       saveDraftEntryId = ""
       saveDraft = ""
+      saveAsNewOpen = false
       if (saveField) saveField.text = ""
       return
     }
-    var id = String(entry.id || "") + "|" + String(entry.plan || "")
+    var id = Model.saveDraftKey(entry)
     if (id === saveDraftEntryId) return
     saveDraftEntryId = id
-    saveDraft = Model.suggestedSaveLabel(entry)
+    saveAsNewOpen = false
+    saveDraft = Model.suggestedSaveLabel(entry, Model.savedLabels(svc.entries))
     if (saveField) saveField.text = saveDraft
   }
 
@@ -302,104 +316,238 @@ Panel {
                 font.pixelSize: Style.font.caption
               }
 
-              Item {
-                visible: !!root.svc && !!root.svc.unsavedEntry
+              // ------------------------------------------------ live login
+              // One block, state-driven (root.loginRow): an unmanaged login or
+              // a legacy report gets the plain Save row; a login the backend
+              // matched to a saved account gets Save (a verified re-sync); a
+              // different account than the marker gets Save as new plus a
+              // two-step Replace; a login the backend could not verify gets
+              // "It's X – update" (two-step) and Save as new. Only the confirm
+              // rows and the existing Overwrite row ever reach saveAccountForce.
+              Column {
+                visible: root.loginRow !== ""
                 width: parent.width
-                height: visible ? Style.spacing.controlHeight : 0
+                spacing: Style.spacing.labelGap
 
-                Row {
-                  anchors.fill: parent
-                  spacing: Style.spacing.controlGap
+                Text {
+                  visible: root.loginRow === "conflict"
+                  width: parent.width
+                  elide: Text.ElideRight
+                  maximumLineCount: 1
+                  textFormat: Text.PlainText
+                  text: Model.conflictCaption(root.loginEntry)
+                  color: Color.urgent
+                  font.family: Style.font.family
+                  font.pixelSize: Style.font.caption
+                }
 
-                  Text {
-                    id: unsavedLabel
-                    anchors.verticalCenter: parent.verticalCenter
-                    textFormat: Text.PlainText
-                    text: "unsaved login"
-                    color: Color.muted
-                    font.family: Style.font.family
-                    font.pixelSize: Style.font.caption
-                  }
+                Text {
+                  visible: root.loginRow === "matches"
+                  width: parent.width
+                  elide: Text.ElideRight
+                  maximumLineCount: 1
+                  textFormat: Text.PlainText
+                  text: Model.matchesCaption(root.loginEntry)
+                  color: Color.muted
+                  font.family: Style.font.family
+                  font.pixelSize: Style.font.caption
+                }
 
-                  TextField {
-                    id: saveField
-                    width: Math.max(Style.spacing.numberFieldWidth,
-                      parent.width - unsavedLabel.implicitWidth
-                      - saveButton.implicitWidth - parent.spacing * 2)
-                    anchors.verticalCenter: parent.verticalCenter
-                    enabled: !!root.svc && !root.svc.busy
-                    maximumLength: 32
-                    selectByMouse: true
-                    verticalPadding: Style.spacing.labelGap
-                    onTextEdited: {
-                      root.saveDraft = text
-                      if (root.svc) root.svc.saveConflictLabel = ""
+                Text {
+                  visible: root.loginRow === "unverified"
+                  width: parent.width
+                  elide: Text.ElideRight
+                  maximumLineCount: 1
+                  textFormat: Text.PlainText
+                  text: Model.unverifiedCaption(root.loginEntry)
+                  color: Color.muted
+                  font.family: Style.font.family
+                  font.pixelSize: Style.font.caption
+                }
+
+                Item {
+                  visible: root.saveFieldShown
+                  width: parent.width
+                  height: visible ? Style.spacing.controlHeight : 0
+
+                  Row {
+                    anchors.fill: parent
+                    spacing: Style.spacing.controlGap
+
+                    Text {
+                      id: unsavedLabel
+                      visible: root.loginRow === "save"
+                      anchors.verticalCenter: parent.verticalCenter
+                      textFormat: Text.PlainText
+                      text: "unsaved login"
+                      color: Color.muted
+                      font.family: Style.font.family
+                      font.pixelSize: Style.font.caption
+                    }
+
+                    TextField {
+                      id: saveField
+                      width: Math.max(Style.spacing.numberFieldWidth,
+                        parent.width - saveButton.implicitWidth - parent.spacing
+                        - (unsavedLabel.visible ? unsavedLabel.implicitWidth + parent.spacing : 0))
+                      anchors.verticalCenter: parent.verticalCenter
+                      enabled: !!root.svc && !root.svc.busy
+                      maximumLength: 32
+                      selectByMouse: true
+                      verticalPadding: Style.spacing.labelGap
+                      onTextEdited: {
+                        root.saveDraft = text
+                        if (root.svc) {
+                          root.svc.saveConflictLabel = ""
+                          root.svc.replaceConfirmLabel = ""
+                        }
+                      }
+                    }
+
+                    Button {
+                      id: saveButton
+                      anchors.verticalCenter: parent.verticalCenter
+                      text: root.loginRow === "save" || root.loginRow === "matches"
+                        ? "Save" : "Save as new"
+                      fontSize: Style.font.caption
+                      horizontalPadding: Style.spacing.controlGap
+                      verticalPadding: Style.spacing.labelGap
+                      enabled: !!root.svc && !root.svc.busy
+                        && Model.validSaveLabel(root.saveDraft)
+                      onClicked: root.svc.saveAccount(root.saveDraft)
                     }
                   }
+                }
 
-                  Button {
-                    id: saveButton
-                    anchors.verticalCenter: parent.verticalCenter
-                    text: "Save"
-                    fontSize: Style.font.caption
-                    horizontalPadding: Style.spacing.controlGap
-                    verticalPadding: Style.spacing.labelGap
-                    enabled: !!root.svc && !root.svc.busy
-                      && Model.validSaveLabel(root.saveDraft)
-                    onClicked: root.svc.saveAccount(root.saveDraft)
+                // Why Save is disabled: an invalid name. Shown only while the
+                // field is non-empty so the resting state stays quiet.
+                Text {
+                  visible: root.saveFieldShown
+                    && root.saveDraft !== "" && !Model.validSaveLabel(root.saveDraft)
+                  width: parent.width
+                  wrapMode: Text.WordWrap
+                  textFormat: Text.PlainText
+                  text: "Name uses lowercase letters, digits, _ or - (for example: work)."
+                  color: Color.muted
+                  font.family: Style.font.family
+                  font.pixelSize: Style.font.caption
+                }
+
+                // A save the backend refused because the slot holds a different
+                // login. Overwrite forces exactly that label; it disappears the
+                // moment the field is edited to a different name.
+                Item {
+                  visible: !!root.svc && root.svc.saveConflictLabel !== ""
+                    && root.svc.saveConflictLabel === root.saveDraft
+                  width: parent.width
+                  height: visible ? Style.spacing.controlHeight : 0
+
+                  Row {
+                    anchors.fill: parent
+                    spacing: Style.spacing.controlGap
+
+                    Text {
+                      id: conflictLabel
+                      anchors.verticalCenter: parent.verticalCenter
+                      width: parent.width - overwriteButton.implicitWidth - parent.spacing
+                      elide: Text.ElideRight
+                      textFormat: Text.PlainText
+                      text: "\u201c" + (root.svc ? root.svc.saveConflictLabel : "")
+                        + "\u201d holds a different login."
+                      color: Color.urgent
+                      font.family: Style.font.family
+                      font.pixelSize: Style.font.caption
+                    }
+
+                    Button {
+                      id: overwriteButton
+                      anchors.verticalCenter: parent.verticalCenter
+                      text: "Overwrite"
+                      fontSize: Style.font.caption
+                      horizontalPadding: Style.spacing.controlGap
+                      verticalPadding: Style.spacing.labelGap
+                      enabled: !!root.svc && !root.svc.busy
+                      onClicked: root.svc.saveAccountForce(root.saveDraft)
+                    }
                   }
                 }
-              }
 
-              // Why Save is disabled: an invalid name. Shown only while the
-              // field is non-empty so the resting state stays quiet.
-              Text {
-                visible: !!root.svc && !!root.svc.unsavedEntry
-                  && root.saveDraft !== "" && !Model.validSaveLabel(root.saveDraft)
-                width: parent.width
-                wrapMode: Text.WordWrap
-                textFormat: Text.PlainText
-                text: "Name uses lowercase letters, digits, _ or - (for example: work)."
-                color: Color.muted
-                font.family: Style.font.family
-                font.pixelSize: Style.font.caption
-              }
-
-              // A save the backend refused because the slot holds a different
-              // login. Overwrite forces exactly that label; it disappears the
-              // moment the field is edited to a different name.
-              Item {
-                visible: !!root.svc && root.svc.saveConflictLabel !== ""
-                  && root.svc.saveConflictLabel === root.saveDraft
-                width: parent.width
-                height: visible ? Style.spacing.controlHeight : 0
-
+                // Quiet second-step openers. Each only opens a confirm row.
                 Row {
-                  anchors.fill: parent
+                  visible: (root.loginRow === "conflict" || root.loginRow === "unverified")
+                    && !root.confirmShown
+                  width: parent.width
                   spacing: Style.spacing.controlGap
 
-                  Text {
-                    id: conflictLabel
-                    anchors.verticalCenter: parent.verticalCenter
-                    width: parent.width - overwriteButton.implicitWidth - parent.spacing
-                    elide: Text.ElideRight
-                    textFormat: Text.PlainText
-                    text: "\u201c" + (root.svc ? root.svc.saveConflictLabel : "")
-                      + "\u201d holds a different login."
-                    color: Color.urgent
-                    font.family: Style.font.family
-                    font.pixelSize: Style.font.caption
-                  }
-
                   Button {
-                    id: overwriteButton
-                    anchors.verticalCenter: parent.verticalCenter
-                    text: "Overwrite"
+                    visible: root.loginRow === "conflict"
+                    text: "Replace " + Model.quoted(root.replaceTarget) + "\u2026"
+                    foreground: Color.muted
                     fontSize: Style.font.caption
                     horizontalPadding: Style.spacing.controlGap
                     verticalPadding: Style.spacing.labelGap
                     enabled: !!root.svc && !root.svc.busy
-                    onClicked: root.svc.saveAccountForce(root.saveDraft)
+                    onClicked: root.svc.replaceConfirmLabel = root.replaceTarget
+                  }
+
+                  Button {
+                    visible: root.loginRow === "unverified"
+                    text: "It's " + Model.quoted(root.replaceTarget) + " \u2013 update"
+                    foreground: Color.muted
+                    fontSize: Style.font.caption
+                    horizontalPadding: Style.spacing.controlGap
+                    verticalPadding: Style.spacing.labelGap
+                    enabled: !!root.svc && !root.svc.busy
+                    onClicked: root.svc.replaceConfirmLabel = root.replaceTarget
+                  }
+
+                  Button {
+                    visible: root.loginRow === "unverified" && !root.saveAsNewOpen
+                    text: "Save as new\u2026"
+                    foreground: Color.muted
+                    fontSize: Style.font.caption
+                    horizontalPadding: Style.spacing.controlGap
+                    verticalPadding: Style.spacing.labelGap
+                    enabled: !!root.svc && !root.svc.busy
+                    onClicked: root.saveAsNewOpen = true
+                  }
+                }
+
+                // The confirm row: names what is lost, then forces exactly the
+                // label the user opened it for (replaceConfirmLabel).
+                Item {
+                  visible: root.confirmShown
+                  width: parent.width
+                  height: visible ? Style.spacing.controlHeight : 0
+
+                  Row {
+                    anchors.fill: parent
+                    spacing: Style.spacing.controlGap
+
+                    Text {
+                      anchors.verticalCenter: parent.verticalCenter
+                      width: parent.width - confirmButton.implicitWidth - parent.spacing
+                      elide: Text.ElideRight
+                      maximumLineCount: 1
+                      textFormat: Text.PlainText
+                      text: root.loginRow === "conflict"
+                        ? Model.replaceCaption(root.loginEntry)
+                        : Model.unverifiedConfirmCaption(root.loginEntry)
+                      color: Color.urgent
+                      font.family: Style.font.family
+                      font.pixelSize: Style.font.caption
+                    }
+
+                    Button {
+                      id: confirmButton
+                      anchors.verticalCenter: parent.verticalCenter
+                      text: root.loginRow === "conflict" ? "Replace" : "Update"
+                      fontSize: Style.font.caption
+                      horizontalPadding: Style.spacing.controlGap
+                      verticalPadding: Style.spacing.labelGap
+                      enabled: !!root.svc && !root.svc.busy
+                      onClicked: root.svc.saveAccountForce(root.svc.replaceConfirmLabel)
+                    }
                   }
                 }
               }
@@ -819,6 +967,11 @@ Panel {
     readonly property int primaryPercent: metrics.primary ? Number(metrics.primary.percent) : 0
     readonly property string detailText: Model.entryTooltip(entry, root.nowMs)
     readonly property var renameSource: Model.renameLabel(entry)
+    readonly property string email: Model.claudeEntryEmail(entry)
+    readonly property string liveCaption: Model.liveLoginCaption(entry)
+    // Switching is held while the live login conflicts with the marker: the
+    // outgoing login would otherwise be re-saved over the wrong slot.
+    readonly property bool held: !!root.svc && !!root.svc.loginConflict
     property bool renaming: false
     property string renameDraft: ""
 
@@ -830,9 +983,10 @@ Panel {
       background: "transparent"
       horizontalPadding: 0
       verticalPadding: 0
-      tooltipText: claudeRow.detailText
+      tooltipText: claudeRow.switchable && claudeRow.held
+        ? "Save or replace the current login first" : claudeRow.detailText
       enabled: !claudeRow.renaming
-        && (!claudeRow.switchable || (!!root.svc && !root.svc.busy))
+        && (!claudeRow.switchable || (!!root.svc && !root.svc.busy && !root.svc.loginConflict))
       onClicked: if (claudeRow.switchable && root.svc) root.svc.switchEntry(claudeRow.entry)
     }
 
@@ -846,6 +1000,11 @@ Panel {
         width: parent.width
         height: Style.spacing.controlHeight
         spacing: Style.spacing.labelGap
+        // Room left for the name (and, when known, the e-mail beside it).
+        readonly property bool emailShown: !claudeRow.renaming && claudeRow.email !== ""
+        readonly property real nameSpace: Math.max(0, claudeLine.width - Style.spacing.huge * 2
+          - claudePercent.width - renameControls.width
+          - claudeLine.spacing * (emailShown ? 5 : 4))
 
         Item {
           width: Style.spacing.huge
@@ -876,8 +1035,7 @@ Panel {
 
         Text {
           visible: !claudeRow.renaming
-          width: Math.max(0, claudeLine.width - Style.spacing.huge * 2
-            - claudePercent.width - renameControls.width - claudeLine.spacing * 4)
+          width: claudeLine.emailShown ? Math.floor(claudeLine.nameSpace / 2) : claudeLine.nameSpace
           anchors.verticalCenter: parent.verticalCenter
           elide: Text.ElideRight
           textFormat: Text.PlainText
@@ -888,10 +1046,22 @@ Panel {
           font.pixelSize: Style.font.bodySmall
         }
 
+        Text {
+          visible: claudeLine.emailShown
+          width: Math.floor(claudeLine.nameSpace / 2)
+          anchors.verticalCenter: parent.verticalCenter
+          elide: Text.ElideRight
+          maximumLineCount: 1
+          textFormat: Text.PlainText
+          text: claudeRow.email
+          color: Color.muted
+          font.family: Style.font.family
+          font.pixelSize: Style.font.caption
+        }
+
         TextField {
           visible: claudeRow.renaming
-          width: Math.max(0, claudeLine.width - Style.spacing.huge * 2
-            - claudePercent.width - renameControls.width - claudeLine.spacing * 4)
+          width: claudeLine.nameSpace
           anchors.verticalCenter: parent.verticalCenter
           maximumLength: 32
           selectByMouse: true
@@ -975,6 +1145,19 @@ Panel {
         maximumLineCount: 1
         textFormat: Text.PlainText
         text: Model.claudeMeterCaption(claudeRow.entry, root.nowMs)
+        color: Color.muted
+        font.family: Style.font.family
+        font.pixelSize: Style.font.caption
+      }
+
+      // Still verifying, or verified but not yet written back: one quiet line.
+      Text {
+        visible: claudeRow.liveCaption !== ""
+        width: parent.width
+        elide: Text.ElideRight
+        maximumLineCount: 1
+        textFormat: Text.PlainText
+        text: claudeRow.liveCaption
         color: Color.muted
         font.family: Style.font.family
         font.pixelSize: Style.font.caption

@@ -86,6 +86,14 @@ Item {
   readonly property var claudeEntries: groupedEntries.claude
   readonly property var agentEntries: groupedEntries.agents
   readonly property var unsavedEntry: Model.unsavedLoginEntry(entries)
+  // The live login is a different account than the active marker: switching
+  // is held until it is saved elsewhere or the marker is replaced.
+  readonly property var loginConflict: Model.loginConflict(entries)
+  // The backend cannot yet prove the live login is the marker's account.
+  readonly property var unverifiedLogin: Model.unverifiedLogin(entries)
+  // Label whose Replace/Update confirm row the panel has opened; "" when none.
+  // Cleared by every parsed report, every save result, and any field edit.
+  property string replaceConfirmLabel: ""
   readonly property var barSegments: Model.buildBarSegments(presentableEntries, barShows)
   readonly property bool hasReport: lastRefreshMs > 0
   readonly property bool refreshing: usageProcess.running
@@ -256,6 +264,9 @@ Item {
       entries = parsed.entries
       lastRefreshMs = Date.now()
       binaryMissing = false
+      // A confirm names the login seen at the last poll; a new report may
+      // describe another one, so the user re-opens it against fresh state.
+      replaceConfirmLabel = ""
 
       // Exactly one synchronous evaluation consumes each successful parse —
       // this handler is the only evaluation site, so that holds by structure.
@@ -326,8 +337,10 @@ Item {
     return true
   }
 
-  // Replace a slot that holds a different login. Only offered by the panel
-  // after a save was refused for exactly this label (saveConflictLabel).
+  // Replace a saved account with the live login. Only offered by the panel
+  // behind an explicit confirm: the Overwrite row after a save was refused
+  // for exactly this label (saveConflictLabel), or the Replace/Update row
+  // the user opened for exactly this label (replaceConfirmLabel).
   function saveAccountForce(label) {
     if (!Model.validSaveLabel(label) || root.busy || resolvedBinary === "") return false
     statusError = ""
@@ -508,6 +521,7 @@ Item {
   }
 
   function finishSave(exitCode) {
+    replaceConfirmLabel = ""
     var boundedError = boundedCompletionError(exitCode, saveStdout,
       "account save", 30, 65536)
     if (boundedError === "" && Number(exitCode) === 0) {

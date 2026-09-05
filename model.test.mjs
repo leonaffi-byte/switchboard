@@ -80,6 +80,179 @@ test('old reports do not invent radios or the unsaved-login row', () => {
   assert.equal(model.isSwitchableEntry(entry), false);
   assert.equal(model.isUnsavedLoginEntry(entry), false);
   assert.equal(model.unsavedLoginEntry(parsed.entries), null);
+  assert.equal(entry.login_state, '');
+  assert.equal(model.loginState(entry), 'saved');
+  assert.equal(model.loginRowState(entry), '');
+  assert.equal(model.liveLoginCaption(entry), '');
+});
+
+test('old reports without login_state still render the legacy unsaved row', () => {
+  const parsed = model.parseReport(JSON.stringify({entries: [{
+    id: 'anthropic', display_name: 'Claude', plan: 'Max', status: 'ready', active: true,
+    login_unsaved: true, sections: []
+  }]}));
+  const entry = parsed.entries[0];
+  assert.equal(entry.login_state, '');
+  assert.equal(model.loginState(entry), 'unsaved');
+  assert.equal(model.isUnsavedLoginEntry(entry), true);
+  assert.equal(model.unsavedLoginEntry(parsed.entries), entry);
+  // No conflict label → no held rows, no Replace; the plain Save row as before.
+  assert.equal(model.loginConflict(parsed.entries), null);
+  assert.equal(model.unverifiedLogin(parsed.entries), null);
+  assert.equal(model.loginRowState(entry), 'save');
+  assert.equal(model.replaceTargetLabel(entry), '');
+  assert.equal(model.liveLoginCaption(entry), '');
+  assert.equal(model.claudeEntryEmail(entry), '');
+  assert.equal(model.suggestedSaveLabel(entry, []), 'max');
+  const saved = model.parseReport(JSON.stringify({entries: [{id: 'anthropic', status: 'ready', account_label: 'main'}]}));
+  assert.equal(model.loginState(saved.entries[0]), 'saved');
+  assert.equal(model.loginRowState(saved.entries[0]), '');
+});
+
+test('report parsing keeps login_state, e-mails, conflict/matches labels and identity_check bounded and validated', () => {
+  const longLocal = 'x'.repeat(150);
+  const parsed = model.parseReport(JSON.stringify({entries: [{
+    id: 'anthropic', status: 'ready', active: true, login_unsaved: true,
+    login_state: 'UNSAVED', login_email: ' B@Example.com ', login_conflict_label: 'leoleo',
+    login_conflict_email: 'a@example.com', login_matches_label: 'Bad Label', identity_check: 'weird',
+    account_email: 'ignored@example.com'
+  }, {
+    id: 'anthropic@work', status: 'ready', active: false, account_email: 'w @example.com',
+    login_state: 'unverified', login_email: 'w@example.com'
+  }, {
+    id: 'anthropic', status: 'ready', login_state: 'unverified', identity_check: 'deferred',
+    login_email: 'two words@example.com', login_conflict_label: '../etc', account_label: 'main'
+  }, {
+    id: 'anthropic', status: 'ready', login_state: 'saved', login_email: `${longLocal}@example.com`,
+    login_conflict_email: 'no-at-sign', identity_check: 'unavailable', account_email: 'e\u0000vil@x.io'
+  }]}));
+  const [conflict, saved, deferred, bounded] = parsed.entries;
+  // login_state is whitelisted (case-sensitive); a bad value is "" and the
+  // legacy login_unsaved flag still yields the unsaved vocabulary.
+  assert.equal(conflict.login_state, '');
+  assert.equal(model.loginState(conflict), 'unsaved');
+  assert.equal(conflict.login_email, 'B@Example.com');
+  assert.equal(conflict.login_conflict_label, 'leoleo');
+  assert.equal(conflict.login_conflict_email, 'a@example.com');
+  assert.equal(conflict.login_matches_label, '');
+  assert.equal(conflict.identity_check, '');
+  assert.equal(conflict.account_email, 'ignored@example.com');
+  assert.equal(model.claudeEntryEmail(conflict), 'B@Example.com');
+  // Saved rows show their own address; whitespace fails the rule, and angle
+  // brackets are escaped at the boundary like every other report string.
+  assert.equal(saved.account_email, '');
+  assert.equal(model.normalizeEntry({id: 'anthropic@w', account_email: '<w@example.com>'}).account_email,
+    '‹w@example.com›');
+  assert.doesNotMatch(model.normalizeEntry({id: 'anthropic', login_email: '<b@x.io>'}).login_email, /[<>]/);
+  assert.equal(saved.login_state, 'unverified');
+  assert.equal(model.claudeEntryEmail(saved), '');
+  assert.equal(model.claudeEntryEmail({...saved, account_email: 'w@example.com'}), 'w@example.com');
+  assert.equal(model.loginRowState(saved), '');
+  assert.equal(model.liveLoginCaption(saved), '');
+  // Whitespace inside an address or a path-like label is rejected.
+  assert.equal(deferred.login_email, '');
+  assert.equal(deferred.login_conflict_label, '');
+  assert.equal(deferred.identity_check, 'deferred');
+  assert.equal(model.loginRowState(deferred), '');
+  assert.equal(model.liveLoginCaption(deferred), 'verifying login… saved copy updates on next check');
+  // Over-long addresses are cut at 120 characters and still one token.
+  assert.ok(bounded.login_email.length <= 120);
+  assert.equal(bounded.login_conflict_email, '');
+  // A control character is stripped at the boundary; the remainder is a plain address.
+  assert.equal(bounded.account_email, 'evil@x.io');
+  assert.equal(bounded.identity_check, 'unavailable');
+  assert.equal(model.loginState(bounded), 'saved');
+  for (const value of ['saved', 'rotated', 'unmanaged', 'unsaved', 'unverified'])
+    assert.equal(model.normalizeEntry({id: 'anthropic', login_state: value}).login_state, value);
+  for (const value of ['', null, 'Saved', 'un saved', 'deleted', 42])
+    assert.equal(model.normalizeEntry({id: 'anthropic', login_state: value}).login_state, '');
+  for (const value of ['deferred', 'unavailable'])
+    assert.equal(model.normalizeEntry({id: 'anthropic', identity_check: value}).identity_check, value);
+  for (const value of ['', 'Deferred', 'failed', null])
+    assert.equal(model.normalizeEntry({id: 'anthropic', identity_check: value}).identity_check, '');
+});
+
+test('live-login states drive the conflict hold, the unverified block and the row captions', () => {
+  const rows = [claude('anthropic@leoleo', false, 20, {account_email: 'a@example.com'})];
+  const live = extra => ({...claude('anthropic', true, 40), account_label: '', ...extra});
+
+  // unsaved + conflict: switching is held, Save as new + Replace naming both addresses
+  const conflict = live({login_unsaved: true, login_state: 'unsaved', login_email: 'b@example.com',
+    login_conflict_label: 'leoleo', login_conflict_email: 'a@example.com'});
+  assert.equal(model.loginConflict([conflict, ...rows]), conflict);
+  assert.equal(model.unverifiedLogin([conflict, ...rows]), null);
+  assert.equal(model.loginRowState(conflict), 'conflict');
+  assert.equal(model.replaceTargetLabel(conflict), 'leoleo');
+  assert.equal(model.conflictCaption(conflict), 'Logged in as b@example.com — not “leoleo” (a@example.com)');
+  assert.equal(model.replaceCaption(conflict), 'This forgets “leoleo” (a@example.com).');
+  assert.equal(model.replaceCaption({...conflict, login_conflict_email: ''}), 'This forgets “leoleo” (saved login).');
+  assert.equal(model.conflictCaption({...conflict, login_email: '', login_conflict_email: ''}),
+    'Logged in as a different account — not “leoleo”');
+  assert.equal(model.liveLoginCaption(conflict), '');
+  assert.equal(model.claudeEntryEmail(conflict), 'b@example.com');
+  assert.equal(model.claudeEntryEmail(rows[0]), 'a@example.com');
+
+  // unsaved + matches: plain Save re-syncs the matching saved account
+  const matches = live({login_unsaved: true, login_state: 'unsaved', login_email: 'a@example.com',
+    login_matches_label: 'leoleo'});
+  assert.equal(model.loginRowState(matches), 'matches');
+  assert.equal(model.loginConflict([matches, ...rows]), null);
+  assert.equal(model.matchesCaption(matches), 'login matches saved account “leoleo”');
+  assert.equal(model.suggestedSaveLabel(matches, model.savedLabels([matches, ...rows])), 'leoleo');
+
+  // unmanaged (new backend) → the plain Save row
+  const unmanaged = live({login_unsaved: true, login_state: 'unmanaged', login_email: 'c@example.com'});
+  assert.equal(model.loginRowState(unmanaged), 'save');
+  assert.equal(model.replaceTargetLabel(unmanaged), '');
+
+  // unverified + deferred: no block, a quiet caption under the active row
+  const deferred = live({login_state: 'unverified', identity_check: 'deferred', account_label: 'leoleo',
+    login_email: 'b@example.com'});
+  assert.equal(model.unverifiedLogin([deferred, ...rows]), deferred);
+  assert.equal(model.loginConflict([deferred, ...rows]), null);
+  assert.equal(model.loginRowState(deferred), '');
+  assert.equal(model.liveLoginCaption(deferred), 'verifying login… saved copy updates on next check (b@example.com)');
+  assert.equal(model.liveLoginCaption({...deferred, identity_check: ''}), 'verifying login… saved copy updates on next check (b@example.com)');
+  assert.equal(model.liveLoginCaption({...deferred, login_email: ''}), 'verifying login… saved copy updates on next check');
+
+  // unverified + unavailable: the explicit block, naming the live login when known
+  const unavailable = {...deferred, identity_check: 'unavailable'};
+  assert.equal(model.loginRowState(unavailable), 'unverified');
+  assert.equal(model.replaceTargetLabel(unavailable), 'leoleo');
+  assert.equal(model.liveLoginCaption(unavailable), '');
+  assert.equal(model.unverifiedCaption(unavailable), 'Logged in as b@example.com — can\'t verify it\'s still “leoleo”');
+  assert.equal(model.unverifiedConfirmCaption(unavailable), 'If b@example.com is not “leoleo”, “leoleo” is lost.');
+  assert.equal(model.unverifiedCaption({...unavailable, login_email: ''}), 'can\'t verify the login is still “leoleo”');
+  assert.equal(model.unverifiedConfirmCaption({...unavailable, login_email: ''}),
+    'If this login is a different account, “leoleo” is lost.');
+  // Save as new never proposes the marker itself.
+  assert.equal(model.suggestedSaveLabel({...unavailable, login_email: 'leoleo@example.com'},
+    model.savedLabels([unavailable, ...rows])), 'leoleo-2');
+  // Without a usable marker label nothing destructive is offered.
+  assert.equal(model.loginRowState({...unavailable, account_label: ''}), '');
+  assert.equal(model.loginRowState({...unavailable, account_label: 'Bad Label'}), '');
+
+  // rotated / saved: no block; rotated gets the one-line note
+  assert.equal(model.loginRowState(live({login_state: 'rotated', account_label: 'leoleo'})), '');
+  assert.equal(model.liveLoginCaption(live({login_state: 'rotated', account_label: 'leoleo'})),
+    'saved copy updates on next check');
+  assert.equal(model.liveLoginCaption(live({login_state: 'saved', account_label: 'leoleo'})), '');
+  // Only the default entry ever carries a live-login state.
+  assert.equal(model.loginRowState({...conflict, id: 'anthropic@x'}), '');
+  assert.equal(model.replaceTargetLabel({...unavailable, id: 'anthropic@x'}), '');
+  assert.equal(model.loginConflict([{...conflict, id: 'anthropic@x'}]), null);
+  assert.equal(model.unverifiedLogin([{...unavailable, id: 'anthropic@x'}]), null);
+  assert.deepEqual(Array.from(model.savedLabels([conflict, ...rows, claude('anthropic@Bad!', false, 1)])).sort(),
+    ['leoleo']);
+  assert.deepEqual(Array.from(model.savedLabels([live({account_label: 'main'}), ...rows])).sort(), ['leoleo', 'main']);
+  // The draft key changes with every field that changes the suggestion.
+  assert.notEqual(model.saveDraftKey(conflict), model.saveDraftKey(matches));
+  assert.notEqual(model.saveDraftKey(unavailable), model.saveDraftKey({...unavailable, login_email: 'z@example.com'}));
+  assert.equal(model.saveDraftKey(unavailable), model.saveDraftKey({...unavailable, identity_check: 'deferred'}));
+  assert.equal(model.saveDraftKey(null), '');
+  // Tooltips carry the address on line 1.
+  assert.equal(model.entryTooltip(rows[0], 0).split('\n')[0], 'leoleo · a@example.com');
+  assert.equal(model.entryTooltip({...rows[0], plan: 'Max'}, 0).split('\n')[0], 'leoleo · Max · a@example.com');
 });
 
 test('invalid reports fail without throwing', () => {
@@ -187,10 +360,34 @@ test('save labels are safely suggested and strictly validated', () => {
   assert.equal(model.suggestedSaveLabel({plan: '../../TOKEN<script>'}), 'tokenscript');
   assert.equal(model.suggestedSaveLabel({plan: '!!!'}), 'main');
   assert.equal(model.suggestedSaveLabel({plan: 'a'.repeat(80)}).length, 20);
+  assert.equal(model.suggestedSaveLabel({plan: '--force'}), 'force');
+  assert.equal(model.suggestedSaveLabel(null), 'main');
   for (const label of ['main', 'work-2', 'acct_one', 'a'.repeat(32)])
     assert.equal(model.validSaveLabel(label), true);
   for (const label of ['', 'Work', '../main', 'has space', 'a'.repeat(33)])
     assert.equal(model.validSaveLabel(label), false);
+});
+
+test('suggested save label prefers matches_label, then the e-mail local part, then the plan, and avoids collisions', () => {
+  assert.equal(model.suggestedSaveLabel({login_email: 'Leo.Naffi+x@example.com', plan: 'Max'}, []), 'leonaffix');
+  assert.equal(model.suggestedSaveLabel({login_matches_label: 'work', login_email: 'leo@example.com', plan: 'Max'},
+    ['work', 'leo']), 'work');
+  assert.equal(model.suggestedSaveLabel({login_matches_label: 'Bad Label', login_email: 'leo@example.com'}, []), 'leo');
+  assert.equal(model.suggestedSaveLabel({login_email: 'not-an-email', plan: 'Claude Max 20x'}, []), 'claudemax20x');
+  assert.equal(model.suggestedSaveLabel({login_email: '@example.com', plan: ''}, []), 'main');
+  assert.equal(model.suggestedSaveLabel({login_email: '_-leo@example.com'}, []), 'leo');
+  assert.equal(model.suggestedSaveLabel({login_email: `${'a'.repeat(40)}@example.com`}, []), 'a'.repeat(20));
+  // Collisions with a different saved account append -2, -3, … within 20 characters.
+  assert.equal(model.suggestedSaveLabel({login_email: 'leo@example.com'}, ['leo']), 'leo-2');
+  assert.equal(model.suggestedSaveLabel({login_email: 'leo@example.com'}, ['leo', 'leo-2']), 'leo-3');
+  assert.equal(model.suggestedSaveLabel({plan: 'Max'}, ['max', 'max-2', 'max-3']), 'max-4');
+  const long = model.suggestedSaveLabel({login_email: `${'b'.repeat(40)}@example.com`}, ['b'.repeat(20)]);
+  assert.equal(long, `${'b'.repeat(18)}-2`);
+  assert.equal(long.length, 20);
+  for (const label of [long, 'leo-2', 'leonaffix', 'max-4']) assert.equal(model.validSaveLabel(label), true);
+  // The matching saved account is the one name that is never suffixed.
+  assert.equal(model.suggestedSaveLabel({login_matches_label: 'leo'}, ['leo']), 'leo');
+  assert.equal(model.suggestedSaveLabel({login_email: 'main@example.com'}, undefined), 'main');
 });
 
 test('auto-switch decision returns every first-miss reason', () => {
@@ -206,9 +403,30 @@ test('auto-switch decision returns every first-miss reason', () => {
   assert.equal(decision([{...active, stale: true}, target]).reason, 'no-fresh-data');
   assert.equal(decision([{...active, status: 'error', error: 'nope'}, target]).reason, 'no-fresh-data');
   assert.equal(decision([{...active, login_unsaved: true}, target]).reason, 'unsaved-login');
+  assert.equal(decision([{...active, login_state: 'unverified', identity_check: 'deferred'}, target]).reason,
+    'login-unverified');
   assert.equal(decision([claude('anthropic', true, 84), target]).reason, 'under-threshold');
   assert.equal(decision([active, claude('anthropic@work', false, 76)]).reason, 'no-candidate');
   assert.equal(decision([active, target], {lastSwitchMs: 1_400_001}).reason, 'cooldown');
+});
+
+test('auto-switch stays off for unsaved and unverified logins', () => {
+  const target = claude('anthropic@work', false, 30);
+  const active = extra => ({...claude('anthropic', true, 95), account_label: 'main', ...extra});
+  for (const state of ['unsaved', 'unmanaged'])
+    assert.equal(decision([active({login_unsaved: true, login_state: state}), target]).reason, 'unsaved-login');
+  for (const check of ['deferred', 'unavailable', ''])
+    assert.equal(decision([active({login_state: 'unverified', identity_check: check}), target]).reason,
+      'login-unverified');
+  // A saved or rotated login switches as before; only the default row's state counts.
+  assert.equal(decision([active({login_state: 'saved'}), target]).action, 'switch');
+  assert.equal(decision([active({login_state: 'rotated'}), target]).action, 'switch');
+  assert.equal(decision([active({}), {...target, login_state: 'unverified'}]).action, 'switch');
+  // Parsed reports carry the same outcome end to end.
+  const parsed = model.parseReport(JSON.stringify({entries: [
+    {...active({login_state: 'unverified', identity_check: 'unavailable'})}, target
+  ]}));
+  assert.equal(decision(parsed.entries).reason, 'login-unverified');
 });
 
 test('auto-switch honors threshold, margin, cooldown, exclusions, and deterministic picks', () => {
@@ -605,14 +823,29 @@ test('manifest and QML retain the required plugin lifecycle contracts', () => {
   assert.match(service, /refreshIntervalSec = Model\.integerSetting\([^\n]*, 300, 60, 3600, 30\)/);
   assert.match(service, /\["notify-send", "-a", "Switchboard", "Claude auto-switch"/);
   assert.match(service, /Model\.alertDecisions\(parsed\.entries, alertArmedState,/);
-  // Exactly one --force in the service: the deliberate Overwrite path
-  // (saveAccountForce), reached only from the panel after a lineage conflict;
-  // the plain saveAccount never forces.
+  // Exactly one --force in the service: the deliberate Overwrite/Replace path
+  // (saveAccountForce), reached only from the panel behind an explicit
+  // confirm; the plain saveAccount never forces, and no comment may carry the
+  // token either (the count above is the whole contract).
   assert.equal((service.match(/--force/g) || []).length, 1);
   assert.match(service, /function saveAccountForce\(label\)[\s\S]*?\["account", "save", String\(label\), "--force"\]/);
+  for (const line of service.split('\n').filter(row => row.includes('--force')))
+    assert.doesNotMatch(line, /^\s*\/\//);
   const plainSave = service.slice(service.indexOf('function saveAccount(label)'),
     service.indexOf('function saveAccountForce'));
   assert.doesNotMatch(plainSave, /--force/);
+  // Switch/toggle argv unchanged: no --force, no new subcommand.
+  assert.doesNotMatch(service, /\["account", "switch"[^\]]*--force/);
+  assert.doesNotMatch(service, /\["account", "toggle"[^\]]*--force/);
+  // Identity state lives beside unsavedEntry; the confirm label is cleared by
+  // every parsed report and every save result.
+  assert.match(service, /readonly property var loginConflict:\s*Model\.loginConflict\(entries\)/);
+  assert.match(service, /readonly property var unverifiedLogin:\s*Model\.unverifiedLogin\(entries\)/);
+  assert.match(service, /property string replaceConfirmLabel:\s*""/);
+  const finishRefreshOk = service.slice(service.indexOf('if (parsed.ok) {'), service.indexOf('Model.autoSwitchDecision('));
+  assert.match(finishRefreshOk, /replaceConfirmLabel = ""/);
+  const finishSaveBody = service.slice(service.indexOf('function finishSave'), service.indexOf('function renameAccount'));
+  assert.ok(finishSaveBody.indexOf('replaceConfirmLabel = ""') < finishSaveBody.indexOf('boundedCompletionError'));
   assert.equal((service.match(/root\.completionsPending\+\+/g) || []).length, 8);
   assert.equal((service.match(/root\.completionsPending--/g) || []).length, 1);
 
@@ -646,11 +879,60 @@ test('manifest and QML retain the required plugin lifecycle contracts', () => {
   assert.match(panel, /root\.svc\.saveConflictLabel !== ""[\s\S]{0,80}?saveConflictLabel === root\.saveDraft/);
   assert.match(panel, /onClicked:\s*root\.svc\.saveAccountForce\(root\.saveDraft\)/);
   assert.match(panel, /onTextEdited:\s*\{[\s\S]*?root\.svc\.saveConflictLabel = ""/);
+  assert.match(panel, /onTextEdited:\s*\{[\s\S]*?root\.svc\.replaceConfirmLabel = ""/);
   assert.match(panel, /Name uses lowercase letters/);
+  // saveAccountForce is reached from exactly two places: the Overwrite row
+  // (saveConflictLabel) and the Replace/Update confirm row, whose visibility
+  // and argument are both the label the user opened it for.
+  assert.equal((panel.match(/saveAccountForce\(/g) || []).length, 2);
+  assert.match(panel, /onClicked:\s*root\.svc\.saveAccountForce\(root\.svc\.replaceConfirmLabel\)/);
+  assert.match(panel, /readonly property bool confirmShown:[^\n]*\n?[^\n]*svc\.replaceConfirmLabel === replaceTarget/);
+  const confirmRow = panel.slice(panel.indexOf('visible: root.confirmShown'),
+    panel.indexOf('saveAccountForce(root.svc.replaceConfirmLabel)'));
+  assert.match(confirmRow, /textFormat:\s*Text\.PlainText/);
+  assert.match(confirmRow, /Model\.replaceCaption\(root\.loginEntry\)/);
+  assert.match(confirmRow, /Model\.unverifiedConfirmCaption\(root\.loginEntry\)/);
+  assert.match(confirmRow, /color:\s*Color\.urgent/);
+  assert.match(confirmRow, /text:\s*root\.loginRow === "conflict" \? "Replace" : "Update"/);
+  // Openers only set the confirm label; they never force anything themselves.
+  const openers = panel.slice(panel.indexOf('// Quiet second-step openers'), panel.indexOf('visible: root.confirmShown'));
+  assert.equal((openers.match(/onClicked:\s*root\.svc\.replaceConfirmLabel = root\.replaceTarget/g) || []).length, 2);
+  assert.doesNotMatch(openers, /saveAccountForce|saveAccount\(/);
+  assert.match(openers, /"Replace " \+ Model\.quoted\(root\.replaceTarget\)/);
+  assert.match(openers, /"It's " \+ Model\.quoted\(root\.replaceTarget\) \+ " \\u2013 update"/);
+  assert.match(openers, /"Save as new\\u2026"/);
+  // The live-login block is state-driven; the plain Save row survives for
+  // unmanaged/legacy logins, and captions are PlainText, elided, one accent.
+  assert.match(panel, /readonly property string loginRow:\s*Model\.loginRowState\(loginEntry\)/);
+  assert.match(panel, /readonly property var loginEntry:\s*svc \? \(svc\.unsavedEntry \|\| svc\.unverifiedLogin\) : null/);
+  assert.match(panel, /text:\s*"unsaved login"/);
+  assert.match(panel, /text:\s*Model\.conflictCaption\(root\.loginEntry\)[\s\S]{0,40}color:\s*Color\.urgent/);
+  assert.match(panel, /text:\s*Model\.unverifiedCaption\(root\.loginEntry\)[\s\S]{0,40}color:\s*Color\.muted/);
+  assert.match(panel, /text:\s*Model\.matchesCaption\(root\.loginEntry\)[\s\S]{0,40}color:\s*Color\.muted/);
+  assert.match(panel, /\? "Save" : "Save as new"/);
+  assert.match(panel, /Model\.suggestedSaveLabel\(entry, Model\.savedLabels\(svc\.entries\)\)/);
+  assert.match(panel, /Model\.saveDraftKey\(entry\)/);
+  // Every Text in the panel is PlainText: report-controlled strings never
+  // reach a rich-text parser.
+  assert.equal((panel.match(/^\s*Text \{/gm) || []).length,
+    (panel.match(/textFormat:\s*Text\.PlainText/g) || []).length);
+  assert.doesNotMatch(panel, /Text\.RichText|Text\.AutoText|Text\.StyledText|Text\.MarkdownText/);
   const mainRows = panel.slice(panel.indexOf('component ClaudeAccountRow'),
     panel.indexOf('component ProviderKeyRow'));
   assert.doesNotMatch(mainRows, /wrapMode:\s*Text\.WordWrap/);
   assert.doesNotMatch(mainRows, /maximumLineCount:\s*2/);
+  // Rows: the switch button is held during a conflict (with a tooltip that
+  // says why), the e-mail subtitle is a muted elided caption, and the
+  // verifying/rotated note sits under the row.
+  const claudeRow = panel.slice(panel.indexOf('component ClaudeAccountRow'), panel.indexOf('component AgentRow'));
+  assert.match(claudeRow, /enabled:\s*!claudeRow\.renaming\s*\n?\s*&& \(!claudeRow\.switchable \|\| \(!!root\.svc && !root\.svc\.busy && !root\.svc\.loginConflict\)\)/);
+  assert.match(claudeRow, /"Save or replace the current login first"/);
+  assert.match(claudeRow, /Model\.claudeEntryEmail\(entry\)/);
+  assert.match(claudeRow, /text:\s*claudeRow\.email[\s\S]{0,40}color:\s*Color\.muted[\s\S]{0,80}font\.pixelSize:\s*Style\.font\.caption/);
+  assert.match(claudeRow, /Model\.liveLoginCaption\(entry\)/);
+  assert.match(claudeRow, /text:\s*claudeRow\.liveCaption[\s\S]{0,40}color:\s*Color\.muted/);
+  assert.doesNotMatch(claudeRow, /Color\.urgent/);
+  assert.doesNotMatch(panel, /[\u{1F300}-\u{1FAFF}\u{2600}-\u{27BF}]/u);
 });
 
 test('alert state follows the account across a slot move, not the entry id', () => {
@@ -995,6 +1277,17 @@ test('isLineageConflict recognises the differing-login save refusal only', () =>
     + 'existing flat Claude account "personal": its credential lineage differs from '
     + 'the live login; pass `--force` to replace it';
   assert.equal(model.isLineageConflict(refusal), true);
+  // The identity-aware backend names both logins; the sentinel words survive.
+  const identityRefusal = 'ai-usagebar account save: credentials error: refusing to overwrite '
+    + 'existing flat Claude account "leoleo": its login differs from the live login '
+    + '(saved: a@example.com, live: b@example.com); pass `--force` to replace it, '
+    + 'or save under a new name';
+  assert.equal(model.isLineageConflict(identityRefusal), true);
+  assert.equal(model.isLineageConflict(identityRefusal.replace('a@example.com', 'unknown')), true);
+  // A refusal for an unverified or different login on switch is not a save conflict.
+  assert.equal(model.isLineageConflict('cannot verify that the live Claude login still belongs to '
+    + '"leoleo" (the live login\'s account is not known yet); retry while online, run `account save '
+    + '<new-name>`, or pass `--force` to switch and discard the live login'), false);
   // Unrelated failures must not offer Overwrite.
   assert.equal(model.isLineageConflict('ai-usagebar account save: credentials error: '
     + 'invalid flat account label "Bad Label": use [a-z0-9_-]+'), false);
