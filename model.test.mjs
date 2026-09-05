@@ -193,10 +193,12 @@ test('live-login states drive the conflict hold, the unverified block and the ro
   assert.equal(model.claudeEntryEmail(rows[0]), 'a@example.com');
 
   // unsaved + matches: plain Save re-syncs the matching saved account
+  // The backend always carries the marker as login_conflict_label alongside
+  // login_matches_label; "matches" wins for the row state, and rows stay held.
   const matches = live({login_unsaved: true, login_state: 'unsaved', login_email: 'a@example.com',
-    login_matches_label: 'leoleo'});
+    login_conflict_label: 'leonaffi', login_matches_label: 'leoleo'});
   assert.equal(model.loginRowState(matches), 'matches');
-  assert.equal(model.loginConflict([matches, ...rows]), null);
+  assert.notEqual(model.loginConflict([matches, ...rows]), null);
   assert.equal(model.matchesCaption(matches), 'login matches saved account “leoleo”');
   assert.equal(model.suggestedSaveLabel(matches, model.savedLabels([matches, ...rows])), 'leoleo');
 

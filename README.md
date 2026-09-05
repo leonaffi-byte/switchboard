@@ -318,8 +318,8 @@ Switchboard spawns exactly two programs: `ai-usagebar` (subcommands
 `notify-send`. From `usage --json` the plugin reads, per entry, the additive
 report fields `login_state` (`saved|rotated|unmanaged|unsaved|unverified`),
 `login_unsaved`, `login_email`, `login_conflict_label`, `login_conflict_email`,
-`login_matches_label`, `identity_check` (`deferred|unavailable`) and, on saved
-rows, `account_email`; every value is whitelisted or validated in `Model.js`
+`login_matches_label`, `identity_check` (`deferred|unavailable`), `plan_changed`
+and, on saved rows, `account_email`; every value is whitelisted or validated in `Model.js`
 before it reaches a view, and a missing field never invents a state. Every invocation goes through one fixed, positional bash wrapper
 (`backendCommand` in `Model.js`; the binary and arguments travel as `"$@"` and are
 never spliced into the script). The wrapper `exec`s into coreutils
