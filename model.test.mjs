@@ -899,7 +899,7 @@ test('manifest and QML retain the required plugin lifecycle contracts', () => {
   assert.equal((openers.match(/onClicked:\s*root\.svc\.replaceConfirmLabel = root\.replaceTarget/g) || []).length, 2);
   assert.doesNotMatch(openers, /saveAccountForce|saveAccount\(/);
   assert.match(openers, /"Replace " \+ Model\.quoted\(root\.replaceTarget\)/);
-  assert.match(openers, /"It's " \+ Model\.quoted\(root\.replaceTarget\) \+ " \\u2013 update"/);
+  assert.match(openers, /"Update " \+ Model\.quoted\(root\.replaceTarget\) \+ "\\u2026"/);
   assert.match(openers, /"Save as new\\u2026"/);
   // The live-login block is state-driven; the plain Save row survives for
   // unmanaged/legacy logins, and captions are PlainText, elided, one accent.
@@ -925,7 +925,9 @@ test('manifest and QML retain the required plugin lifecycle contracts', () => {
   // says why), the e-mail subtitle is a muted elided caption, and the
   // verifying/rotated note sits under the row.
   const claudeRow = panel.slice(panel.indexOf('component ClaudeAccountRow'), panel.indexOf('component AgentRow'));
-  assert.match(claudeRow, /enabled:\s*!claudeRow\.renaming\s*\n?\s*&& \(!claudeRow\.switchable \|\| \(!!root\.svc && !root\.svc\.busy && !root\.svc\.loginConflict\)\)/);
+  // Held rows stay enabled so their tooltip is reachable; the click itself is the guard.
+  assert.match(claudeRow, /enabled:\s*!claudeRow\.renaming\s*\n?\s*&& \(!claudeRow\.switchable \|\| \(!!root\.svc && !root\.svc\.busy\)\)/);
+  assert.match(claudeRow, /onClicked:\s*if \(claudeRow\.switchable && root\.svc && !claudeRow\.held\) root\.svc\.switchEntry\(claudeRow\.entry\)/);
   assert.match(claudeRow, /"Save or replace the current login first"/);
   assert.match(claudeRow, /Model\.claudeEntryEmail\(entry\)/);
   assert.match(claudeRow, /text:\s*claudeRow\.email[\s\S]{0,40}color:\s*Color\.muted[\s\S]{0,80}font\.pixelSize:\s*Style\.font\.caption/);

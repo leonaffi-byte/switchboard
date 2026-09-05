@@ -472,12 +472,14 @@ Panel {
                   }
                 }
 
-                // Quiet second-step openers. Each only opens a confirm row.
-                Row {
+                // Quiet second-step openers, one per line so a long label can
+                // never push a button past the panel edge. Each only opens a
+                // confirm row.
+                Column {
                   visible: (root.loginRow === "conflict" || root.loginRow === "unverified")
                     && !root.confirmShown
                   width: parent.width
-                  spacing: Style.spacing.controlGap
+                  spacing: Style.spacing.labelGap
 
                   Button {
                     visible: root.loginRow === "conflict"
@@ -492,7 +494,7 @@ Panel {
 
                   Button {
                     visible: root.loginRow === "unverified"
-                    text: "It's " + Model.quoted(root.replaceTarget) + " \u2013 update"
+                    text: "Update " + Model.quoted(root.replaceTarget) + "\u2026"
                     foreground: Color.muted
                     fontSize: Style.font.caption
                     horizontalPadding: Style.spacing.controlGap
@@ -526,7 +528,8 @@ Panel {
 
                     Text {
                       anchors.verticalCenter: parent.verticalCenter
-                      width: parent.width - confirmButton.implicitWidth - parent.spacing
+                      width: parent.width - confirmButton.implicitWidth
+                        - cancelConfirmButton.implicitWidth - parent.spacing * 2
                       elide: Text.ElideRight
                       maximumLineCount: 1
                       textFormat: Text.PlainText
@@ -547,6 +550,16 @@ Panel {
                       verticalPadding: Style.spacing.labelGap
                       enabled: !!root.svc && !root.svc.busy
                       onClicked: root.svc.saveAccountForce(root.svc.replaceConfirmLabel)
+                    }
+
+                    Button {
+                      id: cancelConfirmButton
+                      anchors.verticalCenter: parent.verticalCenter
+                      text: "\u2715"
+                      fontSize: Style.font.caption
+                      horizontalPadding: Style.spacing.xs
+                      verticalPadding: Style.spacing.labelGap
+                      onClicked: root.svc.replaceConfirmLabel = ""
                     }
                   }
                 }
@@ -985,9 +998,11 @@ Panel {
       verticalPadding: 0
       tooltipText: claudeRow.switchable && claudeRow.held
         ? "Save or replace the current login first" : claudeRow.detailText
+      // Held rows stay enabled so their tooltip can explain why; the click
+      // is a no-op until the live login is saved or replaced.
       enabled: !claudeRow.renaming
-        && (!claudeRow.switchable || (!!root.svc && !root.svc.busy && !root.svc.loginConflict))
-      onClicked: if (claudeRow.switchable && root.svc) root.svc.switchEntry(claudeRow.entry)
+        && (!claudeRow.switchable || (!!root.svc && !root.svc.busy))
+      onClicked: if (claudeRow.switchable && root.svc && !claudeRow.held) root.svc.switchEntry(claudeRow.entry)
     }
 
     Column {

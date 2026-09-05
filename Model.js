@@ -240,6 +240,7 @@ function normalizeEntry(raw) {
     login_matches_label: labelValue(raw.login_matches_label),
     identity_check: identityCheckValue(raw.identity_check),
     account_email: emailValue(raw.account_email),
+    plan_changed: raw.plan_changed === true,
     sections: sections
   }
 }
@@ -446,7 +447,7 @@ function isActiveEntry(entry) {
 }
 
 function validAccountLabel(text) {
-  return /^[a-z0-9][a-z0-9_-]{0,31}$/.test(String(text === undefined || text === null ? "" : text))
+  return /^[a-z0-9_][a-z0-9_-]{0,31}$/.test(String(text === undefined || text === null ? "" : text))
 }
 
 function switchLabel(entry) {
@@ -518,8 +519,11 @@ function loginRowState(entry) {
     return entry.identity_check === "unavailable" && replaceTargetLabel(entry) !== ""
       ? "unverified" : ""
   if (state !== "unsaved" && state !== "unmanaged") return ""
-  if (state === "unsaved" && labelValue(entry.login_conflict_label) !== "") return "conflict"
+  // A live login that already matches a saved (non-marker) account is a plain
+  // update of that account; the backend still carries the marker as the
+  // conflict label, so "matches" must win here.
   if (state === "unsaved" && labelValue(entry.login_matches_label) !== "") return "matches"
+  if (state === "unsaved" && labelValue(entry.login_conflict_label) !== "") return "conflict"
   return "save"
 }
 
